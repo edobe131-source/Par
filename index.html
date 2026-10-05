@@ -3,44 +3,88 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Par 동작 확인</title>
-  <style>
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      font-family: system-ui, sans-serif;
-      background: #f4f5f7;
-      color: #222;
-    }
-    main {
-      text-align: center;
-      padding: 2rem;
-      background: #fff;
-      border-radius: 12px;
-      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-    }
-    #clock { font-size: 2rem; margin: 1rem 0; font-variant-numeric: tabular-nums; }
-    button { font-size: 1rem; padding: 0.6rem 1.2rem; cursor: pointer; }
-  </style>
+  <title>Par</title>
+  <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <main>
-    <h1>잘 동작합니다 ✅</h1>
-    <div id="clock"></div>
-    <button id="btn">클릭: <span id="count">0</span></button>
-  </main>
-  <script>
-    const clock = document.getElementById('clock');
-    const tick = () => { clock.textContent = new Date().toLocaleTimeString('ko-KR'); };
-    tick();
-    setInterval(tick, 1000);
+  <div id="app">
+    <canvas id="game" width="960" height="540"></canvas>
 
-    let count = 0;
-    document.getElementById('btn').addEventListener('click', () => {
-      document.getElementById('count').textContent = ++count;
-    });
-  </script>
+    <!-- 월드 선택 -->
+    <section id="screen-select" class="screen">
+      <h1 class="logo">PAR</h1>
+      <p class="subtitle">월드를 선택하세요</p>
+      <div id="world-list" class="world-list"></div>
+    </section>
+
+    <!-- 플레이 HUD -->
+    <div id="hud-play" class="hud hidden">
+      <span id="play-title" class="badge"></span>
+      <span class="spacer"></span>
+      <button id="btn-dev" type="button">개발자</button>
+      <button id="btn-play-exit" type="button">월드 선택</button>
+    </div>
+    <div id="hint-play" class="statusbar hidden">
+      <span>←→ / A D 이동 · Space / ↑ / W 점프 · R 처음으로 · Esc 월드 선택</span>
+    </div>
+
+    <!-- 에디터 툴바 -->
+    <div id="hud-editor" class="hud hidden">
+      <span id="editor-title" class="badge"></span>
+      <div id="editor-tools" class="tools">
+        <button type="button" data-tool="block">블록 <kbd>1</kbd></button>
+        <button type="button" data-tool="start">스타트 <kbd>2</kbd></button>
+        <button type="button" data-tool="erase">지우개 <kbd>3</kbd></button>
+      </div>
+      <span class="spacer"></span>
+      <button id="btn-test" type="button">테스트 <kbd>P</kbd></button>
+      <button id="btn-save" type="button">저장 <kbd>Ctrl+S</kbd></button>
+      <button id="btn-mapstr" type="button">맵 문자열</button>
+      <button id="btn-editor-exit" type="button">나가기</button>
+    </div>
+    <div id="hint-editor" class="statusbar hidden">
+      <span id="editor-status"></span>
+      <span class="spacer"></span>
+      <span id="editor-help">좌클릭 배치 · 우클릭 지우기 · WASD/방향키/휠 화면 이동 · 가운데 버튼 드래그</span>
+    </div>
+
+    <!-- 개발자 인증 -->
+    <div id="modal-auth" class="modal hidden">
+      <form id="form-auth" class="modal-box">
+        <h2>개발자 인증</h2>
+        <input id="auth-code" type="password" autocomplete="off" placeholder="인증 코드">
+        <p id="auth-error" class="error"></p>
+        <div class="row">
+          <button type="button" data-close>취소</button>
+          <button type="submit" class="primary">확인</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- 맵 문자열 보기 / 붙여넣기 -->
+    <div id="modal-mapstr" class="modal hidden">
+      <div class="modal-box wide">
+        <h2>맵 문자열</h2>
+        <p class="desc">현재 맵을 하나의 문자열로 나타낸 것입니다. 다른 문자열을 붙여넣고 적용하면 맵이 바뀝니다.</p>
+        <textarea id="mapstr-text" spellcheck="false"></textarea>
+        <p id="mapstr-msg" class="error"></p>
+        <div class="row">
+          <button type="button" data-close>닫기</button>
+          <button type="button" id="mapstr-copy">복사</button>
+          <button type="button" id="mapstr-apply" class="primary">적용</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/sha256.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/worlds.js"></script>
+  <script src="js/input.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/play.js"></script>
+  <script src="js/editor.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/main.js"></script>
 </body>
 </html>

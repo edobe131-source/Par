@@ -1,0 +1,260 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #10131f;
+  color: #eef1f8;
+  font-family: system-ui, -apple-system, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* 16:9 비율을 유지하며 창에 맞춤 */
+#app {
+  position: relative;
+  width: min(100vw - 32px, (100vh - 32px) * 16 / 9);
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  user-select: none;
+}
+
+#game {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#game.editing {
+  cursor: crosshair;
+}
+
+.hidden {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  font-size: 13px;
+  color: #eef1f8;
+  background: rgba(20, 24, 40, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: rgba(45, 52, 80, 0.95);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.active,
+button.primary {
+  background: #ff6b4a;
+  border-color: #ff6b4a;
+  color: #fff;
+}
+
+kbd {
+  font-family: inherit;
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+/* ---- 월드 선택 ---- */
+
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 19, 31, 0.35);
+}
+
+.logo {
+  margin: 0;
+  font-size: 72px;
+  letter-spacing: 0.15em;
+  color: #fff;
+  text-shadow: 0 4px 0 #ff6b4a, 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.subtitle {
+  margin: 8px 0 28px;
+  font-size: 16px;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+.world-list {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.world-card {
+  width: 150px;
+  height: 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 14px;
+  border: 3px solid #fff;
+  background: rgba(20, 24, 40, 0.8);
+  transition: transform 0.12s;
+}
+
+.world-card:hover:not(:disabled) {
+  transform: translateY(-4px);
+  background: rgba(20, 24, 40, 0.9);
+}
+
+.world-num {
+  font-size: 56px;
+  font-weight: 800;
+  line-height: 1;
+  color: #ffd23f;
+}
+
+.world-name {
+  font-size: 15px;
+}
+
+/* ---- HUD (캔버스 위에 겹침) ---- */
+
+.hud,
+.statusbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  pointer-events: none;
+}
+
+.hud {
+  top: 0;
+  background: linear-gradient(rgba(10, 12, 22, 0.6), rgba(10, 12, 22, 0));
+}
+
+.statusbar {
+  bottom: 0;
+  font-size: 12px;
+  background: linear-gradient(rgba(10, 12, 22, 0), rgba(10, 12, 22, 0.65));
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.hud button {
+  pointer-events: auto;
+}
+
+.badge {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 4px 8px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.tools {
+  display: flex;
+  gap: 4px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ---- 모달 ---- */
+
+.modal {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 18, 0.6);
+}
+
+.modal-box {
+  width: min(340px, 90%);
+  padding: 20px;
+  border-radius: 12px;
+  background: #1b2033;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  user-select: text;
+}
+
+.modal-box.wide {
+  width: min(640px, 92%);
+}
+
+.modal-box h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.modal-box .desc {
+  margin: 0 0 10px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.modal-box input,
+.modal-box textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  color: #eef1f8;
+  background: #10131f;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.modal-box textarea {
+  height: 160px;
+  resize: vertical;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.error {
+  min-height: 18px;
+  margin: 8px 0;
+  font-size: 13px;
+  color: #ff7b7b;
+}
+
+.error.ok {
+  color: #7bd67f;
+}
+
+.row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
