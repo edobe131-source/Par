@@ -1,41 +1,25 @@
 // 캔버스 그리기. 플레이와 에디터가 함께 쓴다.
 
-const VIEW_W = 960;
-const VIEW_H = 540;
-
 const Render = {
-  background(ctx, camX) {
-    if (!this.sky) {
-      this.sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-      this.sky.addColorStop(0, '#5ab8f5');
-      this.sky.addColorStop(1, '#cbeeff');
-    }
-    ctx.fillStyle = this.sky;
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    this.hills(ctx, camX * 0.2, 360, 70, 0.006, '#a6dcb9');
-    this.hills(ctx, camX * 0.45, 420, 50, 0.011, '#80c99a');
+  time: 0, // 초 단위. 머신 띠, 밤하늘 별 반짝임 등 움직이는 그림용 (main에서 매 프레임 갱신)
+
+  background(ctx, bg, camX) {
+    Backgrounds.draw(ctx, bg, camX);
   },
 
-  hills(ctx, offset, baseY, amp, freq, color) {
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(0, VIEW_H);
-    for (let x = 0; x <= VIEW_W; x += 16) {
-      const wx = x + offset;
-      ctx.lineTo(x, baseY - amp * (0.5 + 0.5 * Math.sin(wx * freq)) - amp * 0.3 * Math.sin(wx * freq * 2.7));
-    }
-    ctx.lineTo(VIEW_W, VIEW_H);
-    ctx.closePath();
-    ctx.fill();
+  // 화면에 보이는 칸 범위
+  visible(camX, camY) {
+    const T = TILE_SIZE;
+    return {
+      x0: Math.floor(camX / T), x1: Math.floor((camX + VIEW_W) / T),
+      y0: Math.floor(camY / T), y1: Math.floor((camY + VIEW_H) / T),
+    };
   },
 
-  // info: 플레이 중이면 { progress, currentKey } (먹은 별 숨김, 체크포인트 등록 표시), 에디터면 null
+  // info: 플레이 중이면 { progress, currentKey, cloudPress } (먹은 별 숨김, 체크포인트 등록 표시 등), 에디터면 null
   tiles(ctx, map, camX, camY, info = null) {
     const T = TILE_SIZE;
-    const x0 = Math.floor(camX / T);
-    const x1 = Math.floor((camX + VIEW_W) / T);
-    const y0 = Math.floor(camY / T);
-    const y1 = Math.floor((camY + VIEW_H) / T);
+    const { x0, x1, y0, y1 } = this.visible(camX, camY);
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const tile = map.get(x, y);
@@ -45,10 +29,23 @@ const Render = {
   },
 
   tile(ctx, tile, sx, sy, key, info) {
+    const T = TILE_SIZE;
     switch (tile.kind) {
       case 'design': {
-        const offset = tile.design.type === 'spike1' ? Math.round(((tile.pos - 1) * TILE_SIZE) / 3) : 0;
-        ctx.drawImage(DesignArt.tile(tile.design), sx + offset, sy);
+        const type = tile.design.type;
+        const art = DesignArt.tile(tile.design);
+        if (type === 'machine') this.machine(ctx, art, sx, sy, tile.dir);
+        else if (type === 'cloud') {
+          const press = info?.cloudPress?.key === key ? info.cloudPress.amount : 0;
+          ctx.drawImage(art, sx, sy + Math.round(press * 6));
+        } else if (DesignTypes[type].rotatable) {
+          const offset = type === 'spike1' ? Math.round(((tile.pos - 1) * T) / 3) : 0;
+          ctx.save();
+          ctx.translate(sx + T / 2, sy + T / 2);
+          ctx.rotate((tile.rot * Math.PI) / 2);
+          ctx.drawImage(art, -T / 2 + offset, -T / 2);
+          ctx.restore();
+        } else ctx.drawImage(art, sx, sy);
         break;
       }
       case 'start':
@@ -62,6 +59,73 @@ const Render = {
       case 'star':
         if (!info || !info.progress.stars.has(key)) this.star(ctx, sx, sy);
         break;
+      case 'rope':
+        break; // 밧줄은 ropes()에서 따로 그림 (고정점보다 아래까지 늘어지므로)
+    }
+  },
+
+  // 머신: 그림이 진행 방향으로 흘러간다. 왼쪽 방향이면 좌우 반전.
+  machine(ctx, art, sx, sy, dir) {
+    const T = TILE_SIZE;
+    const offset = (this.time * PHYS.conveyorSpeed * 0.5) % T;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, sy, T, T);
+    ctx.clip();
+    ctx.translate(dir ? sx : sx + T, sy);
+    if (!dir) ctx.scale(-1, 1);
+    ctx.drawImage(art, offset, 0);
+    ctx.drawImage(art, offset - T, 0);
+    ctx.restore();
+  },
+
+  // ropes: [{ x, y, length, angle }] (플레이 중엔 흔들리는 각도 포함)
+  ropes(ctx, ropes, camX, camY) {
+    for (const r of ropes) this.rope(ctx, r.x, r.y, r.length, r.angle || 0, camX, camY);
+  },
+
+  rope(ctx, x, y, length, angle, camX, camY) {
+    const px = x * TILE_SIZE + TILE_SIZE / 2 - camX;
+    const py = y * TILE_SIZE + 6 - camY;
+    const L = length * TILE_SIZE - 8;
+    const ex = px + Math.sin(angle) * L;
+    const ey = py + Math.cos(angle) * L;
+    if (Math.max(px, ex) < -20 || Math.min(px, ex) > VIEW_W + 20 || Math.max(py, ey) < -20 || Math.min(py, ey) > VIEW_H + 20) return;
+    ctx.strokeStyle = '#a0703f';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+    ctx.fillStyle = '#5b3a1e';
+    ctx.beginPath();
+    ctx.arc(px, py, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#c48a52';
+    ctx.beginPath();
+    ctx.arc(ex, ey, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  },
+
+  // only: 그릴 구역 종류 목록 (생략하면 전부)
+  zones(ctx, map, camX, camY, only = null) {
+    const T = TILE_SIZE;
+    const { x0, x1, y0, y1 } = this.visible(camX, camY);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const zone = map.zone(x, y);
+        if (!zone || (only && !only.includes(zone))) continue;
+        const sx = x * T - camX;
+        const sy = y * T - camY;
+        ctx.fillStyle = ZoneTypes[zone].color;
+        ctx.fillRect(sx, sy, T, T);
+        if (zone === 'water' && map.zone(x, y - 1) !== 'water') {
+          ctx.fillStyle = 'rgba(200, 235, 255, 0.7)'; // 수면
+          ctx.fillRect(sx, sy, T, 3);
+        }
+      }
     }
   },
 
@@ -112,6 +176,17 @@ const Render = {
     ctx.stroke();
   },
 
+  // 팔레트 아이콘용: 구역 칸 하나
+  zoneIcon(ctx, zone) {
+    ctx.fillStyle = ZoneTypes[zone].color.replace(/[\d.]+\)$/, '0.75)');
+    ctx.fillRect(4, 4, TILE_SIZE - 8, TILE_SIZE - 8);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(5, 5, TILE_SIZE - 10, TILE_SIZE - 10);
+    ctx.setLineDash([]);
+  },
+
   player(ctx, p, camX, camY) {
     const x = Math.round(p.x - camX);
     const y = Math.round(p.y - camY);
@@ -159,19 +234,22 @@ const Render = {
     lines(true);
   },
 
-  // 에디터: 마우스가 가리키는 칸에 놓일 모습을 반투명하게
-  cursor(ctx, x, y, tool, spikePos, camX, camY) {
-    const sx = x * TILE_SIZE - camX;
-    const sy = y * TILE_SIZE - camY;
-    if (tool.kind !== 'erase') {
-      ctx.save();
-      ctx.globalAlpha = 0.55;
-      const tile = tool.kind === 'design' ? designTile(tool.design, spikePos) : SPECIAL_TILES[tool.kind];
-      this.tile(ctx, tile, sx, sy, cellKey(x, y), null);
-      ctx.restore();
-    }
+  // 에디터: 마우스가 가리키는 칸에 놓일 모습을 반투명하게. attrs: { pos, rot, dir }
+  cursor(ctx, x, y, tool, attrs, camX, camY) {
+    const T = TILE_SIZE;
+    const sx = x * T - camX;
+    const sy = y * T - camY;
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    if (tool.kind === 'design') this.tile(ctx, designTile(tool.design, attrs), sx, sy, '', null);
+    else if (tool.kind === 'zone') {
+      ctx.fillStyle = ZoneTypes[tool.zone].color;
+      ctx.fillRect(sx, sy, T, T);
+    } else if (tool.kind === 'rope') this.rope(ctx, x, y, 1, 0, camX, camY);
+    else if (tool.kind !== 'erase') this.tile(ctx, SPECIAL_TILES[tool.kind], sx, sy, '', null);
+    ctx.restore();
     ctx.strokeStyle = tool.kind === 'erase' ? '#ff5252' : '#ffffff';
     ctx.lineWidth = 2;
-    ctx.strokeRect(sx + 1, sy + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+    ctx.strokeRect(sx + 1, sy + 1, T - 2, T - 2);
   },
 };

@@ -1,7 +1,8 @@
 // 맵 에디터. 개발자 인증 후에만 열린다.
 // - 맵은 가로·세로 모두 끝이 없다.
-// - 도구: 지우개 / 스타트 / 체크포인트 / 별 / 블록 디자인들
+// - 도구: 지우개 / 스타트 / 체크포인트 / 별 / 밧줄 / 구역(노란·보라·물) / 블록 디자인들
 // - 스타트는 항상 정확히 1개: 새로 놓으면 기존 스타트가 옮겨지고, 다른 도구로는 덮이거나 지워지지 않는다.
+// - 구역은 타일과 따로 겹쳐 놓인다.
 // - 열려 있는 동안 1분마다 변경 사항을 자동 저장한다.
 
 const AUTOSAVE_MS = 60 * 1000;
@@ -15,11 +16,18 @@ class Editor {
     this.onExit = onExit;
     this.onChange = onChange; // 도구·디자인·테스트 상태가 바뀌면 화면(툴바, 팔레트) 갱신용
 
-    // tool: { kind: 'erase' | 'start' | 'checkpoint' | 'star' } 또는 { kind: 'design', design }
+    // 예전에 만든 맵에도 새 블록 종류가 팔레트에 보이도록, 없는 종류는 기본 디자인을 채워 넣는다.
+    for (const type of DESIGN_TYPE_ORDER) {
+      if (!map.designs.some((d) => d.type === type)) map.designs.push(designFromTemplate(TYPE_DEFAULT_TEMPLATE[type]));
+    }
+
+    // tool: { kind: 'erase' | 'start' | 'checkpoint' | 'star' | 'rope' }, { kind: 'zone', zone }, { kind: 'design', design }
     this.tool = map.designs.length ? { kind: 'design', design: map.designs[0] } : { kind: 'erase' };
-    this.spikePos = 1; // 단일 가시를 놓을 위치 (0 왼쪽, 1 가운데, 2 오른쪽)
+    // 블록을 놓을 때 쓰는 속성: 단일 가시 위치, 가시 회전, 머신 방향
+    this.attrs = { pos: 1, rot: 0, dir: 1 };
     this.hover = null;
-    this.stroke = null; // 드래그로 칠하는 중: { tool, last: {x, y} }
+    this.stroke = null; // 드래그로 칠하는 중: { tool, last: {x, y}, zoneOnly }
+    this.ropeDrag = null; // 밧줄 길이 정하는 중: { x, y }
     this.pan = null; // 가운데 버튼 드래그로 화면 이동 중
     this.test = null; // 테스트 플레이 중인 PlaySession
 
@@ -72,9 +80,21 @@ class Editor {
     this.onChange();
   }
 
-  setSpikePos(pos) {
-    this.spikePos = pos;
+  setAttr(name, value) {
+    this.attrs[name] = value;
     this.onChange();
+  }
+
+  // R: 가시는 90도 회전, 머신은 방향 바꾸기
+  rotate() {
+    const type = this.tool.kind === 'design' ? DesignTypes[this.tool.design.type] : null;
+    if (type?.rotatable) this.setAttr('rot', (this.attrs.rot + 1) % 4);
+    else if (type?.directional) this.setAttr('dir', 1 - this.attrs.dir);
+  }
+
+  setBackground(bg) {
+    this.map.background = bg;
+    this.dirty = true;
   }
 
   // ---- 디자인 관리 ----
@@ -110,7 +130,7 @@ class Editor {
 
   startTest() {
     this.test = new PlaySession(this.map.clone(), new Progress());
-    this.stroke = this.pan = this.hover = null;
+    this.stroke = this.pan = this.hover = this.ropeDrag = null;
     this.onChange();
   }
 
@@ -121,32 +141,40 @@ class Editor {
 
   // ---- 칸 편집 ----
 
-  apply(x, y, tool) {
-    const current = this.map.get(x, y);
+  // zoneOnly: 구역 도구로 우클릭할 때처럼 구역만 지움
+  apply(x, y, tool, zoneOnly = false) {
+    const map = this.map;
+    const current = map.get(x, y);
     if (tool.kind === 'erase') {
-      if (!current || current.kind === 'start') return;
-      this.map.remove(x, y);
+      // 타일을 먼저 지우고, 타일이 없으면(또는 스타트면) 구역을 지운다.
+      if (current && current.kind !== 'start' && !zoneOnly) map.remove(x, y);
+      else if (map.zone(x, y)) map.removeZone(x, y);
+      else return;
+    } else if (tool.kind === 'zone') {
+      if (map.zone(x, y) === tool.zone) return;
+      map.setZone(x, y, tool.zone);
     } else if (tool.kind === 'start') {
       if (current?.kind === 'start') return;
-      this.map.set(x, y, START);
+      map.set(x, y, START);
     } else {
       if (current?.kind === 'start') return;
-      const tile = tool.kind === 'design' ? designTile(tool.design, this.spikePos) : SPECIAL_TILES[tool.kind];
+      const tile = tool.kind === 'design' ? designTile(tool.design, this.attrs) : SPECIAL_TILES[tool.kind];
       if (sameTile(current, tile)) return;
-      this.map.set(x, y, tile);
+      map.set(x, y, tile);
     }
     this.dirty = true;
   }
 
-  // Alt+클릭: 칸에 있는 것을 도구로 집기
+  // Alt+클릭: 칸에 있는 것을 도구로 집기 (타일이 없으면 구역)
   pick(x, y) {
     const tile = this.map.get(x, y);
-    if (!tile) return this.setTool({ kind: 'erase' });
-    if (tile.kind === 'design') {
-      this.spikePos = tile.pos;
+    const zone = this.map.zone(x, y);
+    if (tile?.kind === 'design') {
+      Object.assign(this.attrs, { pos: tile.pos, rot: tile.rot, dir: tile.dir });
       return this.setTool({ kind: 'design', design: tile.design });
     }
-    this.setTool({ kind: tile.kind });
+    if (tile) return this.setTool({ kind: tile.kind });
+    this.setTool(zone ? { kind: 'zone', zone } : { kind: 'erase' });
   }
 
   toCanvas(e) {
@@ -174,10 +202,26 @@ class Editor {
     }
     const cell = this.toCell(p);
     if (e.button === 0 && e.altKey) return this.pick(cell.x, cell.y);
+    if (e.button === 0 && this.tool.kind === 'rope') {
+      // 밧줄: 고정점을 누르고 아래로 끌어 길이를 정한다.
+      if (this.map.get(cell.x, cell.y)?.kind === 'start') return;
+      this.ropeDrag = { x: cell.x, y: cell.y };
+      this.setRopeLength(1);
+      return;
+    }
     const tool = e.button === 0 ? this.tool : e.button === 2 ? { kind: 'erase' } : null;
     if (!tool) return;
-    this.stroke = { tool, last: cell };
-    this.apply(cell.x, cell.y, tool);
+    const zoneOnly = e.button === 2 && this.tool.kind === 'zone';
+    this.stroke = { tool, last: cell, zoneOnly };
+    this.apply(cell.x, cell.y, tool, zoneOnly);
+  }
+
+  setRopeLength(length) {
+    const { x, y } = this.ropeDrag;
+    const current = this.map.get(x, y);
+    if (current?.kind === 'rope' && current.length === length) return;
+    this.map.set(x, y, ropeTile(length));
+    this.dirty = true;
   }
 
   onMouseMove(e) {
@@ -188,17 +232,21 @@ class Editor {
     if (this.pan) {
       this.cam.x = this.pan.camX - (p.x - this.pan.sx);
       this.cam.y = this.pan.camY - (p.y - this.pan.sy);
+    } else if (this.ropeDrag) {
+      const cell = this.toCell(p);
+      this.setRopeLength(Math.max(1, Math.min(MAX_ROPE_LENGTH, cell.y - this.ropeDrag.y + 1)));
     } else if (this.stroke) {
       // 빠르게 드래그해도 칸이 비지 않도록 이전 칸부터 선을 따라 칠한다.
       const cell = this.toCell(p);
-      forEachCellOnLine(this.stroke.last, cell, (x, y) => this.apply(x, y, this.stroke.tool));
+      const { tool, zoneOnly } = this.stroke;
+      forEachCellOnLine(this.stroke.last, cell, (x, y) => this.apply(x, y, tool, zoneOnly));
       this.stroke.last = cell;
     }
   }
 
   onMouseUp(e) {
     if (e.button === 1) this.pan = null;
-    else this.stroke = null;
+    else this.stroke = this.ropeDrag = null;
   }
 
   // 휠: 위아래 이동, Shift+휠 또는 가로 스크롤: 좌우 이동
@@ -222,7 +270,8 @@ class Editor {
 
     if (Input.wasPressed('Escape')) return this.onExit();
     if (Input.wasPressed('KeyP')) return this.startTest();
-    if (Input.wasPressed('KeyQ')) this.setSpikePos((this.spikePos + 1) % 3);
+    if (Input.wasPressed('KeyQ')) this.setAttr('pos', (this.attrs.pos + 1) % 3);
+    if (Input.wasPressed('KeyR')) this.rotate();
 
     const dx = (Input.isDown('ArrowRight', 'KeyD') ? 1 : 0) - (Input.isDown('ArrowLeft', 'KeyA') ? 1 : 0);
     const dy = (Input.isDown('ArrowDown', 'KeyS') ? 1 : 0) - (Input.isDown('ArrowUp', 'KeyW') ? 1 : 0);
@@ -239,10 +288,12 @@ class Editor {
 
     const camX = Math.round(this.cam.x);
     const camY = Math.round(this.cam.y);
-    Render.background(ctx, camX);
+    Render.background(ctx, this.map.background, camX);
     Render.grid(ctx, camX, camY);
     Render.tiles(ctx, this.map, camX, camY);
-    if (this.hover) Render.cursor(ctx, this.hover.x, this.hover.y, this.tool, this.spikePos, camX, camY);
+    Render.ropes(ctx, this.map.positions('rope').map(({ x, y, tile }) => ({ x, y, length: tile.length })), camX, camY);
+    Render.zones(ctx, this.map, camX, camY);
+    if (this.hover && !this.ropeDrag) Render.cursor(ctx, this.hover.x, this.hover.y, this.tool, this.attrs, camX, camY);
   }
 
   statusText() {
@@ -250,7 +301,8 @@ class Editor {
       return `테스트 플레이 중 (저장 안 된 변경도 반영, 진행은 저장 안 됨) · ★ ${this.test.starCount} / ${this.test.starTotal}`
         + ' · C 체크포인트 · R 체크포인트로 · Esc/P 편집으로';
     }
-    const where = this.hover ? ` · 칸 (${this.hover.x}, ${this.hover.y})` : '';
+    let where = this.hover ? ` · 칸 (${this.hover.x}, ${this.hover.y})` : '';
+    if (this.ropeDrag) where += ` · 밧줄 길이 ${this.map.get(this.ropeDrag.x, this.ropeDrag.y).length}칸`;
     if (this.saveFailed) return '⚠ 저장 실패: 브라우저 저장소를 사용할 수 없습니다' + where;
     if (this.dirty) {
       const sec = Math.max(0, Math.ceil((this.nextAutosaveAt - Date.now()) / 1000));

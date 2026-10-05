@@ -162,6 +162,7 @@
   // ---- 에디터 ----
 
   const designDialog = new DesignDialog();
+  const backgroundDialog = new BackgroundDialog();
   const panel = new EditorPanel(el.editorPanel, {
     onNewDesign: (type) =>
       designDialog.open({
@@ -215,6 +216,11 @@
     else state.editor.startTest();
   });
   $('#btn-save').addEventListener('click', () => state.editor.save(false));
+  $('#btn-bg').addEventListener('click', () => {
+    const editor = state.editor;
+    if (editor.test) editor.stopTest();
+    backgroundDialog.open(editor.map.background, (bg) => editor.setBackground(bg));
+  });
   $('#btn-editor-exit').addEventListener('click', closeEditor);
 
   $('#btn-mapstr').addEventListener('click', () => {
@@ -303,13 +309,14 @@
         lastStatusAt = now;
       }
     } else {
-      Render.background(ctx, now * 0.05);
+      Render.background(ctx, DEFAULT_BACKGROUND, now * 0.05);
     }
   }
 
   function frame(now) {
     const dt = Math.min((now - last) / 1000, 0.25);
     last = now;
+    Render.time = now / 1000;
     if (Modal.current) {
       acc = 0;
     } else {

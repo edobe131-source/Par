@@ -1,11 +1,5 @@
 // 블록 디자인 편집 창: 8x8 픽셀에 색을 찍는다. 빗금 칸은 모양 밖이라 투명으로 고정.
 
-const PRESET_COLORS = [
-  '#000000', '#5b5b66', '#a3abbd', '#e8ebf2', '#ffffff', '#7e5032', '#9a6640', '#d9a066',
-  '#2e7d32', '#4caf50', '#7bd67f', '#1e88e5', '#5ab8f5', '#9c27b0', '#ff8fb1', '#e53935',
-  '#ff6b4a', '#ff9800', '#ffd23f', '#fff3a3',
-];
-
 class DesignDialog {
   constructor() {
     const $ = (sel) => document.querySelector(sel);
@@ -15,15 +9,21 @@ class DesignDialog {
     this.typeSelect = $('#design-type');
     this.grid = $('#design-grid');
     this.preview = $('#design-preview');
-    this.colorInput = $('#design-color');
     this.btnTransparent = $('#design-transparent');
-    this.swatches = $('#design-swatches');
+    this.usedEl = $('#design-used');
 
     this.type = 'block';
     this.pixels = [];
     this.color = '#ffffff'; // null이면 투명
     this.paintValue = undefined; // 드래그 중에 칠하는 값 (undefined면 칠하는 중 아님)
     this.onSave = null;
+
+    this.picker = new ColorPicker($('#design-picker'), {
+      onChange: (hex) => {
+        this.color = hex;
+        this.renderUsed();
+      },
+    });
 
     for (const type of DESIGN_TYPE_ORDER) {
       const opt = document.createElement('option');
@@ -37,8 +37,14 @@ class DesignDialog {
       this.render();
     });
 
+    // 좌클릭 칠하기 · 우클릭 투명 · Alt+클릭 그 칸의 색 집기
     this.grid.addEventListener('mousedown', (e) => {
       e.preventDefault();
+      if (e.button === 0 && e.altKey) {
+        const i = this.pixelAt(e);
+        if (i !== null) this.setColor(this.pixels[i]);
+        return;
+      }
       this.paintValue = e.button === 2 ? null : this.color;
       this.paintAt(e);
     });
@@ -50,9 +56,8 @@ class DesignDialog {
       this.paintValue = undefined;
     });
 
-    this.colorInput.addEventListener('input', () => this.setColor(this.colorInput.value));
     this.btnTransparent.addEventListener('click', () => this.setColor(null));
-    this.swatches.addEventListener('click', (e) => {
+    this.usedEl.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-color]');
       if (btn) this.setColor(btn.dataset.color);
     });
@@ -81,17 +86,21 @@ class DesignDialog {
 
   setColor(color) {
     this.color = color;
-    if (color) this.colorInput.value = color;
-    this.renderSwatches();
+    if (color) this.picker.setColor(color);
+    this.renderUsed();
   }
 
-  paintAt(e) {
+  pixelAt(e) {
     const rect = this.grid.getBoundingClientRect();
     const px = Math.floor(((e.clientX - rect.left) / rect.width) * DESIGN_SIZE);
     const py = Math.floor(((e.clientY - rect.top) / rect.height) * DESIGN_SIZE);
-    if (px < 0 || py < 0 || px >= DESIGN_SIZE || py >= DESIGN_SIZE) return;
-    const i = py * DESIGN_SIZE + px;
-    if (!Shapes.mask(this.type)[i] || this.pixels[i] === this.paintValue) return;
+    if (px < 0 || py < 0 || px >= DESIGN_SIZE || py >= DESIGN_SIZE) return null;
+    return py * DESIGN_SIZE + px;
+  }
+
+  paintAt(e) {
+    const i = this.pixelAt(e);
+    if (i === null || !Shapes.mask(this.type)[i] || this.pixels[i] === this.paintValue) return;
     this.pixels[i] = this.paintValue;
     this.render();
   }
@@ -99,7 +108,7 @@ class DesignDialog {
   render() {
     this.renderGrid();
     this.renderPreview();
-    this.renderSwatches();
+    this.renderUsed();
   }
 
   renderGrid() {
@@ -186,10 +195,10 @@ class DesignDialog {
     for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) DesignArt.draw(ctx, design, ox + x * T, oy + y * T, T);
   }
 
-  renderSwatches() {
-    const used = this.pixels.filter(Boolean);
-    const colors = [...new Set([...PRESET_COLORS, ...used])];
-    this.swatches.replaceChildren(
+  // 이 디자인에 쓴 색들 (눌러서 다시 고르기)
+  renderUsed() {
+    const colors = [...new Set(this.pixels.filter(Boolean))];
+    this.usedEl.replaceChildren(
       ...colors.map((c) => {
         const btn = document.createElement('button');
         btn.type = 'button';

@@ -3,21 +3,26 @@
 const Modal = {
   current: null,
   onKey: null,
+  onClose: null,
 
-  open(el, { focus = null, onKey = null } = {}) {
+  // onKey(e): 창이 열려 있을 때 키 입력 · onClose(): 어떤 방법으로든 닫힐 때
+  open(el, { focus = null, onKey = null, onClose = null } = {}) {
     if (this.current) this.close();
     this.current = el;
     this.onKey = onKey;
+    this.onClose = onClose;
     el.classList.remove('hidden');
     if (focus) focus.focus();
   },
 
   close() {
     if (!this.current) return;
+    const onClose = this.onClose;
     this.current.classList.add('hidden');
-    this.current = this.onKey = null;
+    this.current = this.onKey = this.onClose = null;
     document.activeElement?.blur();
     Input.reset();
+    if (onClose) onClose();
   },
 };
 

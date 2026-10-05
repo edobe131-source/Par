@@ -3,12 +3,20 @@
 
 const DESIGN_SIZE = 8;
 
+// solid: 단단함 · hazard: 닿으면 사망 · rotatable: 90도 회전 · positioned: 왼/가운데/오른 위치 · directional: 좌우 방향
 const DesignTypes = {
-  block: { code: 'B', label: '일반 블록', solid: true },
-  deco: { code: 'D', label: '빈칸 (장식)' },
-  spike3: { code: 'T', label: '가시', hazard: true },
-  spike1: { code: 'U', label: '단일 가시', hazard: true },
-  bigspike: { code: 'K', label: '큰 가시', hazard: true },
+  block: { code: 'B', label: '일반 블록', desc: '단단한 블록', solid: true },
+  deco: { code: 'D', label: '빈칸 (장식)', desc: '통과할 수 있는 장식' },
+  spike3: { code: 'T', label: '가시', desc: '닿으면 죽음 · R 회전', hazard: true, rotatable: true },
+  spike1: { code: 'U', label: '단일 가시', desc: '닿으면 죽음 · Q 위치 · R 회전', hazard: true, rotatable: true, positioned: true },
+  bigspike: { code: 'K', label: '큰 가시', desc: '닿으면 죽음 · R 회전', hazard: true, rotatable: true },
+  ice: { code: 'I', label: '얼음', desc: '위에서 미끄러짐', solid: true },
+  machine: { code: 'M', label: '머신', desc: '위에 있으면 저절로 이동 · R 방향', solid: true, directional: true },
+  wall: { code: 'W', label: '벽', desc: '옆에 딱 붙어 있으면 계속 점프', solid: true },
+  cloud: { code: 'C', label: '구름', desc: '닿기만 하면 저절로 튀어오름' },
+  darkcloud: { code: 'N', label: '먹구름', desc: '닿으면 빠르게 떨어짐' },
+  ladder: { code: 'H', label: '사다리', desc: '↑↓로 오르내림 (Space로 점프)' },
+  airjump: { code: 'O', label: '공점', desc: '겹친 채로 점프하면 공중에서 점프' },
 };
 const DESIGN_TYPE_ORDER = Object.keys(DesignTypes);
 const SPIKE_POSITIONS = ['왼쪽', '가운데', '오른쪽'];
@@ -22,20 +30,29 @@ function pointInTriangle(x, y, [a, b, c]) {
   return !(hasNeg && hasPos);
 }
 
+// 칸 중심 기준 시계 방향 90도 회전을 rot번
+function rotateUnitPoint([u, v], rot) {
+  for (let i = 0; i < rot; i++) [u, v] = [1 - v, u];
+  return [u, v];
+}
+
 const Shapes = {
   // 칸 안 좌표(0~1)의 삼각형 목록. null이면 칸 전체를 채우는 사각형.
   // 가시(1/3 크기 삼각형 3개), 단일 가시(1/3 크기 1개, pos 0 왼쪽 · 1 가운데 · 2 오른쪽), 큰 가시(칸 크기 1개)
-  triangles(type, pos = 1) {
+  // rot: 0 위 · 1 오른쪽 · 2 아래 · 3 왼쪽 (가시 끝이 향하는 방향)
+  triangles(type, pos = 1, rot = 0) {
     const small = (i) => [[i / 3, 1], [(i + 0.5) / 3, 2 / 3], [(i + 1) / 3, 1]];
+    let tris;
     switch (type) {
-      case 'spike3': return [small(0), small(1), small(2)];
-      case 'spike1': return [small(pos)];
-      case 'bigspike': return [[[0, 1], [0.5, 0], [1, 1]]];
+      case 'spike3': tris = [small(0), small(1), small(2)]; break;
+      case 'spike1': tris = [small(pos)]; break;
+      case 'bigspike': tris = [[[0, 1], [0.5, 0], [1, 1]]]; break;
       default: return null;
     }
+    return rot ? tris.map((tri) => tri.map((pt) => rotateUnitPoint(pt, rot))) : tris;
   },
 
-  // 칠할 수 있는 픽셀: 모양과 5% 넘게 겹치는 픽셀. 단일 가시는 가운데 위치 기준.
+  // 칠할 수 있는 픽셀: 모양과 5% 넘게 겹치는 픽셀. 단일 가시는 가운데, 회전 없는 상태 기준.
   maskCache: {},
   mask(type) {
     if (!this.maskCache[type]) {
@@ -81,6 +98,7 @@ class Design {
 }
 
 // 기본 디자인 견본. 글자 하나가 픽셀 하나, '.'은 투명.
+const SPIKE_COLORS = { l: '#e8ebf2', h: '#a3abbd' };
 const DESIGN_TEMPLATES = {
   grass: {
     type: 'block',
@@ -99,18 +117,54 @@ const DESIGN_TEMPLATES = {
   },
   spike3: {
     type: 'spike3',
-    colors: { l: '#e8ebf2', h: '#a3abbd' },
+    colors: SPIKE_COLORS,
     rows: ['........', '........', '........', '........', '........', '.h.lh.l.', 'lh.lh.lh', 'lhhlhllh'],
   },
   spike1: {
     type: 'spike1',
-    colors: { l: '#e8ebf2', h: '#a3abbd' },
+    colors: SPIKE_COLORS,
     rows: ['........', '........', '........', '........', '........', '...lh...', '...lh...', '..llhh..'],
   },
   bigspike: {
     type: 'bigspike',
-    colors: { l: '#e8ebf2', h: '#a3abbd' },
+    colors: SPIKE_COLORS,
     rows: ['...lh...', '...lh...', '..llhh..', '..llhh..', '.lllhhh.', '.lllhhh.', 'llllhhhh', 'llllhhhh'],
+  },
+  ice: {
+    type: 'ice',
+    colors: { W: '#eefaff', l: '#a6dcf2', L: '#78c2e6' },
+    rows: ['WWWWWWWW', 'WlllllWl', 'lllllWll', 'llllWlll', 'lllWllll', 'llWlllll', 'lWlllllL', 'LLLLLLLL'],
+  },
+  machine: {
+    // 화살표가 오른쪽을 향하게 그린다. 왼쪽으로 놓으면 좌우 반전되어 그려짐.
+    type: 'machine',
+    colors: { D: '#3d4250', a: '#ffd23f', g: '#7a8194', o: '#c4cad6', k: '#4a4f5c' },
+    rows: ['DaDDDaDD', 'DDaDDDaD', 'DaDDDaDD', 'DDDDDDDD', 'gggggggg', 'goggggog', 'gggggggg', 'kkkkkkkk'],
+  },
+  wall: {
+    type: 'wall',
+    colors: { b: '#8b8fa3', d: '#585c6e' },
+    rows: ['bbbbdbbb', 'bbbbdbbb', 'bbbbdbbb', 'dddddddd', 'bbdbbbbb', 'bbdbbbbb', 'bbdbbbbb', 'dddddddd'],
+  },
+  cloud: {
+    type: 'cloud',
+    colors: { w: '#ffffff', s: '#d6e4f0' },
+    rows: ['..wwww..', '.wwwwww.', 'wwwwwwww', 'wwwwwwww', 'wwwwwwww', 'swwwwwws', '.ssssss.', '........'],
+  },
+  darkcloud: {
+    type: 'darkcloud',
+    colors: { d: '#5d6273', k: '#41454f', r: '#7fb2e5' },
+    rows: ['..dddd..', '.dddddd.', 'dddddddd', 'dddddddd', 'dddddddd', 'kddddddk', '.kkkkkk.', '.r..r.r.'],
+  },
+  ladder: {
+    type: 'ladder',
+    colors: { b: '#8a5a34', r: '#c48a52' },
+    rows: ['b......b', 'brrrrrrb', 'b......b', 'b......b', 'b......b', 'brrrrrrb', 'b......b', 'b......b'],
+  },
+  airjump: {
+    type: 'airjump',
+    colors: { o: '#1f9d5c', i: '#8ef0b5' },
+    rows: ['..oooo..', '.oiiiio.', 'oi....io', 'oi....io', 'oi....io', 'oi....io', '.oiiiio.', '..oooo..'],
   },
 };
 
@@ -120,12 +174,23 @@ function designFromTemplate(name) {
   return new Design(t.type, pixels);
 }
 
+const DEFAULT_DESIGN_ORDER = [
+  'grass', 'dirt', 'flower', 'spike3', 'spike1', 'bigspike',
+  'ice', 'machine', 'wall', 'cloud', 'darkcloud', 'ladder', 'airjump',
+];
+
 function defaultDesigns() {
-  return ['grass', 'dirt', 'flower', 'spike3', 'spike1', 'bigspike'].map(designFromTemplate);
+  return DEFAULT_DESIGN_ORDER.map(designFromTemplate);
 }
 
 // 새 디자인을 만들 때 시작 그림 (장식은 빈 상태로 시작)
-const NEW_DESIGN_TEMPLATE = { block: 'grass', deco: null, spike3: 'spike3', spike1: 'spike1', bigspike: 'bigspike' };
+const NEW_DESIGN_TEMPLATE = {
+  block: 'grass', deco: null, spike3: 'spike3', spike1: 'spike1', bigspike: 'bigspike',
+  ice: 'ice', machine: 'machine', wall: 'wall', cloud: 'cloud', darkcloud: 'darkcloud', ladder: 'ladder', airjump: 'airjump',
+};
+
+// 종류마다 기본으로 쓰는 디자인 (맵에 그 종류가 하나도 없을 때 팔레트에 채워 넣음)
+const TYPE_DEFAULT_TEMPLATE = { ...NEW_DESIGN_TEMPLATE, deco: 'flower' };
 
 function newDesignPixels(type) {
   const name = NEW_DESIGN_TEMPLATE[type];
@@ -135,7 +200,7 @@ function newDesignPixels(type) {
 const DesignArt = {
   cache: new WeakMap(),
 
-  // 디자인을 (x, y)에 size 크기로 그린다. 모양 밖은 잘라낸다.
+  // 디자인을 (x, y)에 size 크기로 그린다 (회전 없음). 모양 밖은 잘라낸다.
   draw(ctx, design, x, y, size, pos = 1) {
     const tris = Shapes.triangles(design.type, pos);
     const s = size / DESIGN_SIZE;
