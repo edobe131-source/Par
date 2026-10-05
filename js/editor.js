@@ -1,11 +1,11 @@
 // 맵 에디터. 개발자 인증 후에만 열린다.
-// - 도구: 일반 블록 / 스타트 / 지우개
-// - 스타트는 항상 정확히 1개: 새로 놓으면 기존 스타트가 옮겨지고, 블록·지우개로는 지워지지 않는다.
+// - 맵은 가로·세로 모두 끝이 없다.
+// - 도구: 지우개 / 스타트 / 체크포인트 / 별 / 블록 디자인들
+// - 스타트는 항상 정확히 1개: 새로 놓으면 기존 스타트가 옮겨지고, 다른 도구로는 덮이거나 지워지지 않는다.
 // - 열려 있는 동안 1분마다 변경 사항을 자동 저장한다.
 
 const AUTOSAVE_MS = 60 * 1000;
 const EDITOR_PAN_SPEED = 700;
-const EDITOR_MARGIN = TILE_SIZE * 3;
 
 class Editor {
   constructor(world, map, canvas, { onExit, onChange }) {
@@ -13,9 +13,11 @@ class Editor {
     this.map = map;
     this.canvas = canvas;
     this.onExit = onExit;
-    this.onChange = onChange; // 도구·테스트 상태가 바뀌면 툴바 갱신용
+    this.onChange = onChange; // 도구·디자인·테스트 상태가 바뀌면 화면(툴바, 팔레트) 갱신용
 
-    this.tool = 'block';
+    // tool: { kind: 'erase' | 'start' | 'checkpoint' | 'star' } 또는 { kind: 'design', design }
+    this.tool = map.designs.length ? { kind: 'design', design: map.designs[0] } : { kind: 'erase' };
+    this.spikePos = 1; // 단일 가시를 놓을 위치 (0 왼쪽, 1 가운데, 2 오른쪽)
     this.hover = null;
     this.stroke = null; // 드래그로 칠하는 중: { tool, last: {x, y} }
     this.pan = null; // 가운데 버튼 드래그로 화면 이동 중
@@ -25,8 +27,10 @@ class Editor {
     this.lastSave = null; // { at: Date, auto: boolean }
     this.saveFailed = false;
 
-    const start = map.findStart();
-    this.cam = clampCamera(map, start.x * TILE_SIZE - VIEW_W / 3, start.y * TILE_SIZE - VIEW_H / 2, EDITOR_MARGIN);
+    this.cam = {
+      x: map.start.x * TILE_SIZE - VIEW_W / 2,
+      y: map.start.y * TILE_SIZE - VIEW_H / 2,
+    };
 
     this.nextAutosaveAt = Date.now() + AUTOSAVE_MS;
     this.autosaveTimer = setInterval(() => this.autosave(), AUTOSAVE_MS);
@@ -68,14 +72,44 @@ class Editor {
     this.onChange();
   }
 
-  replaceMap(map) {
-    this.map = map;
-    this.dirty = true;
-    this.cam = clampCamera(map, this.cam.x, this.cam.y, EDITOR_MARGIN);
+  setSpikePos(pos) {
+    this.spikePos = pos;
+    this.onChange();
   }
 
+  // ---- 디자인 관리 ----
+
+  addDesign(design, after = null) {
+    const i = after ? this.map.designs.indexOf(after) + 1 : this.map.designs.length;
+    this.map.designs.splice(i, 0, design);
+    this.dirty = true;
+    this.setTool({ kind: 'design', design });
+  }
+
+  updateDesign(design, pixels) {
+    design.setPixels(pixels);
+    this.dirty = true;
+    this.onChange();
+  }
+
+  deleteDesign(design) {
+    this.map.removeDesign(design);
+    if (this.tool.design === design) this.tool = { kind: 'erase' };
+    this.dirty = true;
+    this.onChange();
+  }
+
+  replaceMap(map) {
+    this.map = map;
+    this.tool = map.designs.length ? { kind: 'design', design: map.designs[0] } : { kind: 'erase' };
+    this.dirty = true;
+    this.onChange();
+  }
+
+  // ---- 테스트 플레이 (진행 상황은 저장하지 않음) ----
+
   startTest() {
-    this.test = new PlaySession(this.map.clone());
+    this.test = new PlaySession(this.map.clone(), new Progress());
     this.stroke = this.pan = this.hover = null;
     this.onChange();
   }
@@ -85,24 +119,34 @@ class Editor {
     this.onChange();
   }
 
-  apply(x, y, tool) {
-    const map = this.map;
-    const current = map.get(x, y);
-    if (current === null) return;
+  // ---- 칸 편집 ----
 
-    if (tool === 'block') {
-      if (current !== Tile.EMPTY) return;
-      map.set(x, y, Tile.BLOCK);
-    } else if (tool === 'erase') {
-      if (current !== Tile.BLOCK) return;
-      map.set(x, y, Tile.EMPTY);
-    } else if (tool === 'start') {
-      if (current === Tile.START) return;
-      const old = map.findStart();
-      if (old) map.set(old.x, old.y, Tile.EMPTY);
-      map.set(x, y, Tile.START);
+  apply(x, y, tool) {
+    const current = this.map.get(x, y);
+    if (tool.kind === 'erase') {
+      if (!current || current.kind === 'start') return;
+      this.map.remove(x, y);
+    } else if (tool.kind === 'start') {
+      if (current?.kind === 'start') return;
+      this.map.set(x, y, START);
+    } else {
+      if (current?.kind === 'start') return;
+      const tile = tool.kind === 'design' ? designTile(tool.design, this.spikePos) : SPECIAL_TILES[tool.kind];
+      if (sameTile(current, tile)) return;
+      this.map.set(x, y, tile);
     }
     this.dirty = true;
+  }
+
+  // Alt+클릭: 칸에 있는 것을 도구로 집기
+  pick(x, y) {
+    const tile = this.map.get(x, y);
+    if (!tile) return this.setTool({ kind: 'erase' });
+    if (tile.kind === 'design') {
+      this.spikePos = tile.pos;
+      return this.setTool({ kind: 'design', design: tile.design });
+    }
+    this.setTool({ kind: tile.kind });
   }
 
   toCanvas(e) {
@@ -128,9 +172,10 @@ class Editor {
       this.pan = { sx: p.x, sy: p.y, camX: this.cam.x, camY: this.cam.y };
       return;
     }
-    const tool = e.button === 0 ? this.tool : e.button === 2 ? 'erase' : null;
-    if (!tool) return;
     const cell = this.toCell(p);
+    if (e.button === 0 && e.altKey) return this.pick(cell.x, cell.y);
+    const tool = e.button === 0 ? this.tool : e.button === 2 ? { kind: 'erase' } : null;
+    if (!tool) return;
     this.stroke = { tool, last: cell };
     this.apply(cell.x, cell.y, tool);
   }
@@ -138,11 +183,11 @@ class Editor {
   onMouseMove(e) {
     if (this.test) return;
     const p = this.toCanvas(e);
-    const inside = p.x >= 0 && p.y >= 0 && p.x < VIEW_W && p.y < VIEW_H;
-    this.hover = inside ? this.toCell(p) : null;
+    this.hover = e.target === this.canvas ? this.toCell(p) : null;
 
     if (this.pan) {
-      this.cam = clampCamera(this.map, this.pan.camX - (p.x - this.pan.sx), this.pan.camY - (p.y - this.pan.sy), EDITOR_MARGIN);
+      this.cam.x = this.pan.camX - (p.x - this.pan.sx);
+      this.cam.y = this.pan.camY - (p.y - this.pan.sy);
     } else if (this.stroke) {
       // 빠르게 드래그해도 칸이 비지 않도록 이전 칸부터 선을 따라 칠한다.
       const cell = this.toCell(p);
@@ -156,11 +201,16 @@ class Editor {
     else this.stroke = null;
   }
 
+  // 휠: 위아래 이동, Shift+휠 또는 가로 스크롤: 좌우 이동
   onWheel(e) {
     e.preventDefault();
     if (this.test) return;
     const scale = e.deltaMode === 1 ? TILE_SIZE : 1; // 줄 단위 스크롤 대응
-    this.cam = clampCamera(this.map, this.cam.x + (e.deltaX + e.deltaY) * scale, this.cam.y, EDITOR_MARGIN);
+    let dx = e.deltaX * scale;
+    let dy = e.deltaY * scale;
+    if (e.shiftKey && !dx) [dx, dy] = [dy, 0];
+    this.cam.x += dx;
+    this.cam.y += dy;
   }
 
   update(dt) {
@@ -172,16 +222,15 @@ class Editor {
 
     if (Input.wasPressed('Escape')) return this.onExit();
     if (Input.wasPressed('KeyP')) return this.startTest();
-    if (Input.wasPressed('Digit1')) this.setTool('block');
-    if (Input.wasPressed('Digit2')) this.setTool('start');
-    if (Input.wasPressed('Digit3')) this.setTool('erase');
+    if (Input.wasPressed('KeyQ')) this.setSpikePos((this.spikePos + 1) % 3);
 
     const dx = (Input.isDown('ArrowRight', 'KeyD') ? 1 : 0) - (Input.isDown('ArrowLeft', 'KeyA') ? 1 : 0);
     const dy = (Input.isDown('ArrowDown', 'KeyS') ? 1 : 0) - (Input.isDown('ArrowUp', 'KeyW') ? 1 : 0);
     const modifier = Input.isDown('ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight'); // Ctrl+S 중엔 이동 안 함
     if ((dx || dy) && !modifier) {
       const speed = EDITOR_PAN_SPEED * (Input.isDown('ShiftLeft', 'ShiftRight') ? 2.5 : 1) * dt;
-      this.cam = clampCamera(this.map, this.cam.x + dx * speed, this.cam.y + dy * speed, EDITOR_MARGIN);
+      this.cam.x += dx * speed;
+      this.cam.y += dy * speed;
     }
   }
 
@@ -191,25 +240,26 @@ class Editor {
     const camX = Math.round(this.cam.x);
     const camY = Math.round(this.cam.y);
     Render.background(ctx, camX);
-    Render.grid(ctx, this.map, camX, camY);
+    Render.grid(ctx, camX, camY);
     Render.tiles(ctx, this.map, camX, camY);
-    Render.outsideMap(ctx, this.map, camX, camY);
-    if (this.hover && this.map.inBounds(this.hover.x, this.hover.y)) {
-      Render.cursor(ctx, this.hover, this.tool, camX, camY);
-    }
+    if (this.hover) Render.cursor(ctx, this.hover.x, this.hover.y, this.tool, this.spikePos, camX, camY);
   }
 
   statusText() {
-    if (this.test) return '테스트 플레이 중 (저장 안 된 변경도 반영됨) · Esc/P: 편집으로 돌아가기 · R: 처음으로';
-    if (this.saveFailed) return '⚠ 저장 실패: 브라우저 저장소를 사용할 수 없습니다';
+    if (this.test) {
+      return `테스트 플레이 중 (저장 안 된 변경도 반영, 진행은 저장 안 됨) · ★ ${this.test.starCount} / ${this.test.starTotal}`
+        + ' · C 체크포인트 · R 체크포인트로 · Esc/P 편집으로';
+    }
+    const where = this.hover ? ` · 칸 (${this.hover.x}, ${this.hover.y})` : '';
+    if (this.saveFailed) return '⚠ 저장 실패: 브라우저 저장소를 사용할 수 없습니다' + where;
     if (this.dirty) {
       const sec = Math.max(0, Math.ceil((this.nextAutosaveAt - Date.now()) / 1000));
-      return `저장 안 된 변경 있음 · ${sec}초 후 자동 저장`;
+      return `저장 안 된 변경 있음 · ${sec}초 후 자동 저장` + where;
     }
     if (this.lastSave) {
-      return `${this.lastSave.auto ? '자동 저장됨' : '저장됨'} · ${this.lastSave.at.toLocaleTimeString('ko-KR')}`;
+      return `${this.lastSave.auto ? '자동 저장됨' : '저장됨'} · ${this.lastSave.at.toLocaleTimeString('ko-KR')}` + where;
     }
-    return '변경 사항 없음';
+    return '변경 사항 없음' + where;
   }
 }
 

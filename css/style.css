@@ -140,6 +140,11 @@ kbd {
   font-size: 15px;
 }
 
+.world-stars {
+  font-size: 13px;
+  color: #ffd23f;
+}
+
 /* ---- HUD (캔버스 위에 겹침) ---- */
 
 .hud,
@@ -178,12 +183,109 @@ kbd {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
-.tools {
+.badge.stars {
+  color: #ffd23f;
+}
+
+.spacer {
+  flex: 1;
+}
+
+button.small {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+/* ---- 에디터 팔레트 (왼쪽) ---- */
+
+.panel {
+  position: absolute;
+  top: 48px;
+  bottom: 34px;
+  left: 8px;
+  width: 176px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(16, 19, 31, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow-y: auto;
+}
+
+.panel-section.grow {
+  flex: 1;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.panel-title,
+.palette-label {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.8;
+  margin-bottom: 6px;
+}
+
+.palette-label {
+  font-weight: 400;
+  opacity: 0.6;
+  margin: 8px 0 4px;
+}
+
+.palette-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.palette-item {
+  width: 36px;
+  height: 36px;
+  padding: 1px;
+  background: #8fd3fb;
+  border: 2px solid transparent;
+  border-radius: 6px;
+}
+
+.palette-item:hover:not(:disabled) {
+  background: #a9ddfc;
+}
+
+.palette-item.active {
+  border-color: #ff6b4a;
+  background: #8fd3fb;
+}
+
+.palette-item img {
+  display: block;
+  width: 30px;
+  height: 30px;
+  image-rendering: pixelated;
+}
+
+.seg {
+  display: flex;
+  gap: 2px;
+}
+
+.seg button {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.panel-actions {
   display: flex;
   gap: 4px;
 }
 
-.spacer {
+.panel-actions button {
   flex: 1;
 }
 
@@ -257,4 +359,122 @@ kbd {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.row .left {
+  margin-right: auto;
+}
+
+/* ---- 체크포인트 이동 ---- */
+
+.cp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.cp-item {
+  display: flex;
+  justify-content: space-between;
+  text-align: left;
+  font-size: 14px;
+  padding: 8px 12px;
+}
+
+.cp-item.current {
+  border-color: #4cd964;
+}
+
+.cp-note {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* ---- 블록 디자인 편집 ---- */
+
+.modal-box.design-box {
+  width: min(560px, 94%);
+  max-height: 94%;
+  overflow-y: auto;
+}
+
+.type-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.type-row select {
+  font: inherit;
+  font-size: 13px;
+  color: #eef1f8;
+  background: #10131f;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.design-body {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+#design-grid {
+  width: 256px;
+  height: 256px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  cursor: crosshair;
+}
+
+.design-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+#design-preview {
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.color-row input[type='color'] {
+  width: 40px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 22px);
+  gap: 4px;
+}
+
+.swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+}
+
+.swatch.active {
+  border-color: #ff6b4a;
+  box-shadow: 0 0 0 1px #fff;
 }

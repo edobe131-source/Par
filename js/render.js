@@ -3,18 +3,6 @@
 const VIEW_W = 960;
 const VIEW_H = 540;
 
-// 카메라 좌상단 좌표를 맵 범위(+여백) 안으로 제한. 맵이 화면보다 작으면 가운데 정렬.
-function clampCamera(map, x, y, margin = 0) {
-  const clampAxis = (v, mapSize, view) =>
-    mapSize + margin * 2 <= view
-      ? (mapSize - view) / 2
-      : Math.min(Math.max(v, -margin), mapSize - view + margin);
-  return {
-    x: clampAxis(x, map.width * TILE_SIZE, VIEW_W),
-    y: clampAxis(y, map.height * TILE_SIZE, VIEW_H),
-  };
-}
-
 const Render = {
   background(ctx, camX) {
     if (!this.sky) {
@@ -41,53 +29,87 @@ const Render = {
     ctx.fill();
   },
 
-  tiles(ctx, map, camX, camY) {
+  // info: 플레이 중이면 { progress, currentKey } (먹은 별 숨김, 체크포인트 등록 표시), 에디터면 null
+  tiles(ctx, map, camX, camY, info = null) {
     const T = TILE_SIZE;
-    const x0 = Math.max(0, Math.floor(camX / T));
-    const x1 = Math.min(map.width - 1, Math.floor((camX + VIEW_W) / T));
-    const y0 = Math.max(0, Math.floor(camY / T));
-    const y1 = Math.min(map.height - 1, Math.floor((camY + VIEW_H) / T));
+    const x0 = Math.floor(camX / T);
+    const x1 = Math.floor((camX + VIEW_W) / T);
+    const y0 = Math.floor(camY / T);
+    const y1 = Math.floor((camY + VIEW_H) / T);
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
-        const tile = map.rows[y][x];
-        const sx = x * T - camX;
-        const sy = y * T - camY;
-        if (tile === Tile.BLOCK) this.block(ctx, sx, sy, map.get(x, y - 1) !== Tile.BLOCK);
-        else if (tile === Tile.START) this.startFlag(ctx, sx, sy);
+        const tile = map.get(x, y);
+        if (tile) this.tile(ctx, tile, x * T - camX, y * T - camY, cellKey(x, y), info);
       }
     }
   },
 
-  // 위가 비어 있는 블록은 윗면에 잔디를 그린다 (같은 일반 블록, 모양만 다름).
-  block(ctx, sx, sy, grassTop) {
-    const T = TILE_SIZE;
-    ctx.fillStyle = '#9a6640';
-    ctx.fillRect(sx, sy, T, T);
-    ctx.fillStyle = '#7e5032';
-    ctx.fillRect(sx + 6, sy + 14, 4, 4);
-    ctx.fillRect(sx + 20, sy + 22, 4, 4);
-    ctx.fillRect(sx + 14, sy + 6, 3, 3);
-    if (grassTop) {
-      ctx.fillStyle = '#4caf50';
-      ctx.fillRect(sx, sy, T, 8);
-      ctx.fillStyle = '#7bd67f';
-      ctx.fillRect(sx, sy, T, 3);
+  tile(ctx, tile, sx, sy, key, info) {
+    switch (tile.kind) {
+      case 'design': {
+        const offset = tile.design.type === 'spike1' ? Math.round(((tile.pos - 1) * TILE_SIZE) / 3) : 0;
+        ctx.drawImage(DesignArt.tile(tile.design), sx + offset, sy);
+        break;
+      }
+      case 'start':
+        this.flag(ctx, sx, sy, '#ffd23f', info?.currentKey === key);
+        break;
+      case 'checkpoint': {
+        const on = !info || info.progress.checkpoints.has(key);
+        this.flag(ctx, sx, sy, on ? '#4cd964' : '#9aa0ad', info?.currentKey === key);
+        break;
+      }
+      case 'star':
+        if (!info || !info.progress.stars.has(key)) this.star(ctx, sx, sy);
+        break;
     }
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(sx + 0.5, sy + 0.5, T - 1, T - 1);
   },
 
-  startFlag(ctx, sx, sy) {
+  // current: 지금 부활 지점이면 깃대 끝에 흰 점
+  flag(ctx, sx, sy, color, current = false) {
     ctx.fillStyle = '#5b5b66';
     ctx.fillRect(sx + 9, sy + 3, 3, TILE_SIZE - 3);
-    ctx.fillStyle = '#ffd23f';
+    ctx.fillStyle = color;
     ctx.beginPath();
     ctx.moveTo(sx + 12, sy + 3);
     ctx.lineTo(sx + 27, sy + 9);
     ctx.lineTo(sx + 12, sy + 15);
     ctx.closePath();
     ctx.fill();
+    if (current) {
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(sx + 10.5, sy + 3, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
+
+  star(ctx, sx, sy) {
+    const cx = sx + TILE_SIZE / 2;
+    const cy = sy + TILE_SIZE / 2 + 1;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const r = i % 2 ? 5 : 12;
+      const a = -Math.PI / 2 + (i * Math.PI) / 5;
+      ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#ffd23f';
+    ctx.fill();
+    ctx.strokeStyle = '#d99a00';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  },
+
+  eraser(ctx, sx, sy) {
+    ctx.strokeStyle = '#ff5252';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(sx + 8, sy + 8);
+    ctx.lineTo(sx + 24, sy + 24);
+    ctx.moveTo(sx + 24, sy + 8);
+    ctx.lineTo(sx + 8, sy + 24);
+    ctx.stroke();
   },
 
   player(ctx, p, camX, camY) {
@@ -109,51 +131,46 @@ const Render = {
     ctx.fillRect(eyeX + 6 + pupil, y + 9, 2, 4);
   },
 
-  grid(ctx, map, camX, camY) {
+  // 에디터 격자 (무한). 원점(0, 0)을 지나는 선은 진하게.
+  grid(ctx, camX, camY) {
     const T = TILE_SIZE;
-    const left = -camX;
-    const top = -camY;
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+    const x0 = Math.floor(camX / T);
+    const y0 = Math.floor(camY / T);
+    const lines = (strong) => {
+      ctx.beginPath();
+      for (let x = x0; x * T - camX <= VIEW_W; x++) {
+        if ((x === 0) !== strong) continue;
+        const sx = x * T - camX + 0.5;
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx, VIEW_H);
+      }
+      for (let y = y0; y * T - camY <= VIEW_H; y++) {
+        if ((y === 0) !== strong) continue;
+        const sy = y * T - camY + 0.5;
+        ctx.moveTo(0, sy);
+        ctx.lineTo(VIEW_W, sy);
+      }
+      ctx.stroke();
+    };
     ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = 0; x <= map.width; x++) {
-      const sx = Math.round(left + x * T) + 0.5;
-      if (sx < 0 || sx > VIEW_W) continue;
-      ctx.moveTo(sx, top);
-      ctx.lineTo(sx, top + map.height * T);
-    }
-    for (let y = 0; y <= map.height; y++) {
-      const sy = Math.round(top + y * T) + 0.5;
-      if (sy < 0 || sy > VIEW_H) continue;
-      ctx.moveTo(left, sy);
-      ctx.lineTo(left + map.width * T, sy);
-    }
-    ctx.stroke();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+    lines(false);
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    lines(true);
   },
 
-  // 에디터: 맵 바깥 영역을 어둡게 하고 경계선을 그린다.
-  outsideMap(ctx, map, camX, camY) {
-    const w = map.width * TILE_SIZE;
-    const h = map.height * TILE_SIZE;
-    ctx.fillStyle = 'rgba(15, 18, 32, 0.55)';
-    ctx.beginPath();
-    ctx.rect(0, 0, VIEW_W, VIEW_H);
-    ctx.rect(-camX, -camY, w, h);
-    ctx.fill('evenodd');
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(-camX - 1, -camY - 1, w + 2, h + 2);
-  },
-
-  cursor(ctx, cell, tool, camX, camY) {
-    const sx = cell.x * TILE_SIZE - camX;
-    const sy = cell.y * TILE_SIZE - camY;
-    ctx.save();
-    ctx.globalAlpha = 0.5;
-    if (tool === 'block') this.block(ctx, sx, sy, true);
-    else if (tool === 'start') this.startFlag(ctx, sx, sy);
-    ctx.restore();
-    ctx.strokeStyle = tool === 'erase' ? '#ff5252' : '#ffffff';
+  // 에디터: 마우스가 가리키는 칸에 놓일 모습을 반투명하게
+  cursor(ctx, x, y, tool, spikePos, camX, camY) {
+    const sx = x * TILE_SIZE - camX;
+    const sy = y * TILE_SIZE - camY;
+    if (tool.kind !== 'erase') {
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      const tile = tool.kind === 'design' ? designTile(tool.design, spikePos) : SPECIAL_TILES[tool.kind];
+      this.tile(ctx, tile, sx, sy, cellKey(x, y), null);
+      ctx.restore();
+    }
+    ctx.strokeStyle = tool.kind === 'erase' ? '#ff5252' : '#ffffff';
     ctx.lineWidth = 2;
     ctx.strokeRect(sx + 1, sy + 1, TILE_SIZE - 2, TILE_SIZE - 2);
   },
