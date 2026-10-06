@@ -1,8 +1,10 @@
 // 맵 에디터. 개발자 인증 후에만 열린다.
 // - 맵은 가로·세로 모두 끝이 없다.
-// - 도구: 지우개 / 스타트 / 체크포인트 / 별 / 밧줄 / 구역(노란·보라·물) / 블록 디자인들
+// - 도구: 선택 / 지우개 / 스타트 / 체크포인트 / 별 / 밧줄 / 구역(노란·보라·물) / 블록 디자인들
 // - 스타트는 항상 정확히 1개: 새로 놓으면 기존 스타트가 옮겨지고, 다른 도구로는 덮이거나 지워지지 않는다.
 // - 구역은 타일과 따로 겹쳐 놓인다.
+// - 선택 도구: 끌어서 영역 선택 → 영역 안을 끌면 복사본을 끌어다 놓기(Shift: 옮기기),
+//   Ctrl+C/X/V 복사·잘라내기·붙여넣기, Delete 지우기. 한 칸을 고르면 속성(체크포인트 이름·밧줄 길이·코드)을 바꿀 수 있다.
 // - 열려 있는 동안 1분마다 변경 사항을 자동 저장한다.
 
 const AUTOSAVE_MS = 60 * 1000;
@@ -14,14 +16,14 @@ class Editor {
     this.map = map;
     this.canvas = canvas;
     this.onExit = onExit;
-    this.onChange = onChange; // 도구·디자인·테스트 상태가 바뀌면 화면(툴바, 팔레트) 갱신용
+    this.onChange = onChange; // 도구·디자인·선택·테스트 상태가 바뀌면 화면(툴바, 팔레트) 갱신용
 
     // 예전에 만든 맵에도 새 블록 종류가 팔레트에 보이도록, 없는 종류는 기본 디자인을 채워 넣는다.
     for (const type of DESIGN_TYPE_ORDER) {
-      if (!map.designs.some((d) => d.type === type)) map.designs.push(designFromTemplate(TYPE_DEFAULT_TEMPLATE[type]));
+      if (!map.designs.some((d) => d.type === type)) map.addDesign(designFromTemplate(TYPE_DEFAULT_TEMPLATE[type]));
     }
 
-    // tool: { kind: 'erase' | 'start' | 'checkpoint' | 'star' | 'rope' }, { kind: 'zone', zone }, { kind: 'design', design }
+    // tool: { kind: 'select' | 'erase' | 'start' | 'checkpoint' | 'star' | 'rope' }, { kind: 'zone', zone }, { kind: 'design', design }
     this.tool = map.designs.length ? { kind: 'design', design: map.designs[0] } : { kind: 'erase' };
     // 블록을 놓을 때 쓰는 속성: 단일 가시 위치, 가시 회전, 머신 방향
     this.attrs = { pos: 1, rot: 0, dir: 1 };
@@ -30,6 +32,13 @@ class Editor {
     this.ropeDrag = null; // 밧줄 길이 정하는 중: { x, y }
     this.pan = null; // 가운데 버튼 드래그로 화면 이동 중
     this.test = null; // 테스트 플레이 중인 PlaySession
+    this.showTags = false; // 블록마다 블록 태그 표시
+
+    this.selection = null; // { x0, y0, x1, y1 } (끝 칸 포함)
+    this.selecting = null; // 영역을 끌어서 고르는 중: 시작 칸
+    this.clipboard = null; // { w, h, cells: [{ dx, dy, tile, zone }] }
+    this.pasting = false; // 붙여넣기 중: 마우스를 따라다니는 미리보기를 클릭해서 찍음
+    this.dragClip = null; // 선택 영역을 끌어다 놓는 중: { from, clip, move, offset }
 
     this.dirty = false;
     this.lastSave = null; // { at: Date, auto: boolean }
@@ -77,11 +86,18 @@ class Editor {
 
   setTool(tool) {
     this.tool = tool;
+    this.pasting = false;
+    if (tool.kind !== 'select') this.selection = null;
     this.onChange();
   }
 
   setAttr(name, value) {
     this.attrs[name] = value;
+    this.onChange();
+  }
+
+  toggleTags() {
+    this.showTags = !this.showTags;
     this.onChange();
   }
 
@@ -99,9 +115,10 @@ class Editor {
 
   // ---- 디자인 관리 ----
 
+  // 팔레트에 넣는다 (새 블록 태그가 붙음)
   addDesign(design, after = null) {
     const i = after ? this.map.designs.indexOf(after) + 1 : this.map.designs.length;
-    this.map.designs.splice(i, 0, design);
+    this.map.addDesign(design, i);
     this.dirty = true;
     this.setTool({ kind: 'design', design });
   }
@@ -119,9 +136,37 @@ class Editor {
     this.onChange();
   }
 
+  // 코드 저장. 코드가 없던 디자인에 처음 넣으면, 코드가 든 새 블록(새 태그)을 팔레트에 만들고
+  // cell이 주어지면 그 칸의 블록을 새 블록으로 바꾼다. 이미 코드가 있던 디자인은 그 코드를 고친다.
+  saveCode(design, code, cell = null) {
+    code = code.replace(/\s+$/, '');
+    let target = design;
+    if (design.code) {
+      design.code = code;
+    } else {
+      if (!code.trim()) return design;
+      target = design.clone();
+      target.tag = 0;
+      target.code = code;
+      this.map.addDesign(target, this.map.designs.indexOf(design) + 1);
+      if (cell) {
+        const tile = this.map.get(cell.x, cell.y);
+        if (tile?.design === design) this.map.set(cell.x, cell.y, { ...tile, design: target });
+      }
+      if (!cell) this.tool = { kind: 'design', design: target }; // 팔레트에서 연 경우 새 블록을 바로 골라 둠
+    }
+    target.version++; // 팔레트 다시 그리기
+    this.map.changed();
+    this.dirty = true;
+    this.onChange();
+    return target;
+  }
+
   replaceMap(map) {
     this.map = map;
     this.tool = map.designs.length ? { kind: 'design', design: map.designs[0] } : { kind: 'erase' };
+    this.selection = null;
+    this.pasting = false;
     this.dirty = true;
     this.onChange();
   }
@@ -130,7 +175,7 @@ class Editor {
 
   startTest() {
     this.test = new PlaySession(this.map.clone(), new Progress());
-    this.stroke = this.pan = this.hover = this.ropeDrag = null;
+    this.stroke = this.pan = this.hover = this.ropeDrag = this.dragClip = this.selecting = null;
     this.onChange();
   }
 
@@ -177,6 +222,94 @@ class Editor {
     this.setTool(zone ? { kind: 'zone', zone } : { kind: 'erase' });
   }
 
+  // ---- 속성 (선택 도구로 한 칸을 골랐을 때) ----
+
+  selectedCell() {
+    const s = this.selection;
+    if (!s || s.x0 !== s.x1 || s.y0 !== s.y1) return null;
+    return { x: s.x0, y: s.y0, tile: this.map.get(s.x0, s.y0), zone: this.map.zone(s.x0, s.y0) };
+  }
+
+  setCheckpointName(x, y, name) {
+    if (this.map.get(x, y)?.kind !== 'checkpoint') return;
+    this.map.set(x, y, checkpointTile(name.trim()));
+    this.dirty = true;
+  }
+
+  setRopeLength(x, y, length) {
+    const current = this.map.get(x, y);
+    if (current?.kind === 'start') return;
+    if (current?.kind === 'rope' && current.length === length) return;
+    this.map.set(x, y, ropeTile(Math.max(1, Math.min(MAX_ROPE_LENGTH, Math.round(length) || 1))));
+    this.dirty = true;
+  }
+
+  // ---- 영역 복사·붙여넣기 ----
+
+  // withStart: 스타트도 담을지 (옮기기에서만)
+  copyRegion(sel, withStart = false) {
+    const cells = [];
+    for (let y = sel.y0; y <= sel.y1; y++) {
+      for (let x = sel.x0; x <= sel.x1; x++) {
+        let tile = this.map.get(x, y);
+        if (tile?.kind === 'start' && !withStart) tile = null;
+        const zone = this.map.zone(x, y);
+        if (tile || zone) cells.push({ dx: x - sel.x0, dy: y - sel.y0, tile, zone });
+      }
+    }
+    return { w: sel.x1 - sel.x0 + 1, h: sel.y1 - sel.y0 + 1, cells };
+  }
+
+  clearRegion(sel, withStart = false) {
+    for (let y = sel.y0; y <= sel.y1; y++) {
+      for (let x = sel.x0; x <= sel.x1; x++) {
+        const tile = this.map.get(x, y);
+        if (tile && (tile.kind !== 'start' || withStart)) this.map.remove(x, y);
+        if (this.map.zone(x, y)) this.map.removeZone(x, y);
+      }
+    }
+    this.dirty = true;
+  }
+
+  // (x, y)를 왼쪽 위로 해서 찍는다. 빈칸은 덮지 않고, 스타트 자리는 건드리지 않는다.
+  pasteClip(clip, x, y) {
+    for (const c of clip.cells) {
+      const tx = x + c.dx;
+      const ty = y + c.dy;
+      if (c.tile && (this.map.get(tx, ty)?.kind !== 'start' || c.tile.kind === 'start')) this.map.set(tx, ty, c.tile);
+      if (c.zone) this.map.setZone(tx, ty, c.zone);
+    }
+    this.dirty = true;
+  }
+
+  copy() {
+    if (!this.selection) return;
+    this.clipboard = this.copyRegion(this.selection);
+    this.onChange();
+  }
+
+  cut() {
+    if (!this.selection) return;
+    this.copy();
+    this.clearRegion(this.selection);
+    this.onChange();
+  }
+
+  startPaste() {
+    if (!this.clipboard) return;
+    if (this.tool.kind !== 'select') this.tool = { kind: 'select' };
+    this.pasting = true;
+    this.onChange();
+  }
+
+  deleteSelection() {
+    if (!this.selection) return;
+    this.clearRegion(this.selection);
+    this.onChange();
+  }
+
+  // ---- 마우스 ----
+
   toCanvas(e) {
     const rect = this.canvas.getBoundingClientRect();
     return {
@@ -192,6 +325,11 @@ class Editor {
     };
   }
 
+  inSelection(cell) {
+    const s = this.selection;
+    return !!s && cell.x >= s.x0 && cell.x <= s.x1 && cell.y >= s.y0 && cell.y <= s.y1;
+  }
+
   onMouseDown(e) {
     if (this.test) return;
     const p = this.toCanvas(e);
@@ -201,12 +339,31 @@ class Editor {
       return;
     }
     const cell = this.toCell(p);
+    if (this.pasting) {
+      if (e.button === 0) this.pasteClip(this.clipboard, cell.x, cell.y);
+      else if (e.button === 2) {
+        this.pasting = false; // 우클릭: 붙여넣기 끝
+        this.onChange();
+      }
+      return;
+    }
     if (e.button === 0 && e.altKey) return this.pick(cell.x, cell.y);
+    if (e.button === 0 && this.tool.kind === 'select') {
+      if (this.inSelection(cell)) {
+        // 선택 영역 안을 끌면 복사본을 끌어다 놓기 (Shift: 옮기기)
+        this.dragClip = { from: cell, move: e.shiftKey, clip: this.copyRegion(this.selection, e.shiftKey), offset: { x: 0, y: 0 } };
+      } else {
+        this.selecting = cell;
+        this.selection = { x0: cell.x, y0: cell.y, x1: cell.x, y1: cell.y };
+        this.onChange();
+      }
+      return;
+    }
     if (e.button === 0 && this.tool.kind === 'rope') {
       // 밧줄: 고정점을 누르고 아래로 끌어 길이를 정한다.
       if (this.map.get(cell.x, cell.y)?.kind === 'start') return;
       this.ropeDrag = { x: cell.x, y: cell.y };
-      this.setRopeLength(1);
+      this.setRopeLength(cell.x, cell.y, 1);
       return;
     }
     const tool = e.button === 0 ? this.tool : e.button === 2 ? { kind: 'erase' } : null;
@@ -216,28 +373,25 @@ class Editor {
     this.apply(cell.x, cell.y, tool, zoneOnly);
   }
 
-  setRopeLength(length) {
-    const { x, y } = this.ropeDrag;
-    const current = this.map.get(x, y);
-    if (current?.kind === 'rope' && current.length === length) return;
-    this.map.set(x, y, ropeTile(length));
-    this.dirty = true;
-  }
-
   onMouseMove(e) {
     if (this.test) return;
     const p = this.toCanvas(e);
     this.hover = e.target === this.canvas ? this.toCell(p) : null;
+    const cell = this.toCell(p);
 
     if (this.pan) {
       this.cam.x = this.pan.camX - (p.x - this.pan.sx);
       this.cam.y = this.pan.camY - (p.y - this.pan.sy);
+    } else if (this.selecting) {
+      const a = this.selecting;
+      this.selection = { x0: Math.min(a.x, cell.x), y0: Math.min(a.y, cell.y), x1: Math.max(a.x, cell.x), y1: Math.max(a.y, cell.y) };
+    } else if (this.dragClip) {
+      this.dragClip.offset = { x: cell.x - this.dragClip.from.x, y: cell.y - this.dragClip.from.y };
     } else if (this.ropeDrag) {
-      const cell = this.toCell(p);
-      this.setRopeLength(Math.max(1, Math.min(MAX_ROPE_LENGTH, cell.y - this.ropeDrag.y + 1)));
+      const { x, y } = this.ropeDrag;
+      this.setRopeLength(x, y, cell.y - y + 1);
     } else if (this.stroke) {
       // 빠르게 드래그해도 칸이 비지 않도록 이전 칸부터 선을 따라 칠한다.
-      const cell = this.toCell(p);
       const { tool, zoneOnly } = this.stroke;
       forEachCellOnLine(this.stroke.last, cell, (x, y) => this.apply(x, y, tool, zoneOnly));
       this.stroke.last = cell;
@@ -245,8 +399,29 @@ class Editor {
   }
 
   onMouseUp(e) {
-    if (e.button === 1) this.pan = null;
-    else this.stroke = this.ropeDrag = null;
+    if (e.button === 1) {
+      this.pan = null;
+      return;
+    }
+    if (this.selecting) {
+      this.selecting = null;
+      this.onChange();
+    }
+    if (this.dragClip) {
+      const { clip, move, offset } = this.dragClip;
+      this.dragClip = null;
+      if (offset.x || offset.y) {
+        const s = this.selection;
+        if (move) this.clearRegion(s, true);
+        this.pasteClip(clip, s.x0 + offset.x, s.y0 + offset.y);
+        this.selection = { x0: s.x0 + offset.x, y0: s.y0 + offset.y, x1: s.x1 + offset.x, y1: s.y1 + offset.y };
+      }
+      this.onChange();
+    }
+    if (e.button === 0 || e.button === 2) {
+      if (this.ropeDrag) this.onChange();
+      this.stroke = this.ropeDrag = null;
+    }
   }
 
   // 휠: 위아래 이동, Shift+휠 또는 가로 스크롤: 좌우 이동
@@ -268,15 +443,25 @@ class Editor {
       return;
     }
 
-    if (Input.wasPressed('Escape')) return this.onExit();
+    const ctrl = Input.isDown('ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight');
+    if (Input.wasPressed('Escape')) {
+      // 붙여넣기 → 끌기 → 선택 순으로 취소하고, 아무것도 없으면 에디터 나가기
+      if (this.pasting) this.pasting = false;
+      else if (this.dragClip) this.dragClip = null;
+      else if (this.selection) this.selection = null;
+      else return this.onExit();
+      return this.onChange();
+    }
+    if (ctrl) return; // Ctrl을 누른 동안은 다른 단축키·화면 이동 안 함 (Ctrl+C/X/V/S는 main.js에서)
+    if (Input.wasPressed('Delete', 'Backspace')) this.deleteSelection();
     if (Input.wasPressed('KeyP')) return this.startTest();
     if (Input.wasPressed('KeyQ')) this.setAttr('pos', (this.attrs.pos + 1) % 3);
     if (Input.wasPressed('KeyR')) this.rotate();
+    if (Input.wasPressed('KeyT')) this.toggleTags();
 
     const dx = (Input.isDown('ArrowRight', 'KeyD') ? 1 : 0) - (Input.isDown('ArrowLeft', 'KeyA') ? 1 : 0);
     const dy = (Input.isDown('ArrowDown', 'KeyS') ? 1 : 0) - (Input.isDown('ArrowUp', 'KeyW') ? 1 : 0);
-    const modifier = Input.isDown('ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight'); // Ctrl+S 중엔 이동 안 함
-    if ((dx || dy) && !modifier) {
+    if (dx || dy) {
       const speed = EDITOR_PAN_SPEED * (Input.isDown('ShiftLeft', 'ShiftRight') ? 2.5 : 1) * dt;
       this.cam.x += dx * speed;
       this.cam.y += dy * speed;
@@ -293,16 +478,33 @@ class Editor {
     Render.tiles(ctx, this.map, camX, camY);
     Render.ropes(ctx, this.map.positions('rope').map(({ x, y, tile }) => ({ x, y, length: tile.length })), camX, camY);
     Render.zones(ctx, this.map, camX, camY);
-    if (this.hover && !this.ropeDrag) Render.cursor(ctx, this.hover.x, this.hover.y, this.tool, this.attrs, camX, camY);
+    if (this.showTags) Render.tags(ctx, this.map, camX, camY);
+    if (this.selection) Render.selection(ctx, this.selection, camX, camY);
+    if (this.dragClip) {
+      const { clip, offset } = this.dragClip;
+      Render.clipboard(ctx, clip, this.selection.x0 + offset.x, this.selection.y0 + offset.y, camX, camY);
+    } else if (this.pasting && this.hover) {
+      Render.clipboard(ctx, this.clipboard, this.hover.x, this.hover.y, camX, camY);
+    } else if (this.hover && !this.ropeDrag && !this.selecting) {
+      Render.cursor(ctx, this.hover.x, this.hover.y, this.tool, this.attrs, camX, camY);
+    }
   }
 
   statusText() {
     if (this.test) {
+      const err = this.test.scriptErrors[this.test.scriptErrors.length - 1];
+      if (err) return `⚠ 코드 오류 · 태그 ${err.tag} 블록 (${err.x}, ${err.y}) ${err.line}번째 줄: ${err.message} · Esc/P 편집으로`;
       return `테스트 플레이 중 (저장 안 된 변경도 반영, 진행은 저장 안 됨) · ★ ${this.test.starCount} / ${this.test.starTotal}`
         + ' · C 체크포인트 · R 체크포인트로 · Esc/P 편집으로';
     }
     let where = this.hover ? ` · 칸 (${this.hover.x}, ${this.hover.y})` : '';
     if (this.ropeDrag) where += ` · 밧줄 길이 ${this.map.get(this.ropeDrag.x, this.ropeDrag.y).length}칸`;
+    if (this.pasting) where += ' · 붙여넣기: 클릭해서 찍기, 우클릭/Esc로 끝';
+    else if (this.dragClip) where += this.dragClip.move ? ' · 옮기는 중' : ' · 복사본 끌어다 놓는 중 (Shift: 옮기기)';
+    else if (this.selection) {
+      const s = this.selection;
+      where += ` · 선택 ${s.x1 - s.x0 + 1}×${s.y1 - s.y0 + 1}칸`;
+    }
     if (this.saveFailed) return '⚠ 저장 실패: 브라우저 저장소를 사용할 수 없습니다' + where;
     if (this.dirty) {
       const sec = Math.max(0, Math.ceil((this.nextAutosaveAt - Date.now()) / 1000));

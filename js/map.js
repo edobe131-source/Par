@@ -5,22 +5,26 @@
 //   - 구역: 노란 구역(2단 점프) · 보라 구역(무한 점프) · 물 중 하나 (타일과 겹쳐 놓을 수 있음)
 //
 // 맵 문자열 형식 (하나의 문자열, ';'로 나뉜 8부분):
-//   PAR3;<배경>;<디자인들>;<타일 목록>;<원점x>,<원점y>;<행들>;<구역 원점x>,<구역 원점y>;<구역 행들>
+//   PAR4;<배경>;<디자인들>;<타일 목록>;<원점x>,<원점y>;<행들>;<구역 원점x>,<구역 원점y>;<구역 행들>
 //
 //   배경: p0 / p1 / p2 (기본 배경 초원·노을·밤) · s<색> (단색) · g<색>+<색>+<방향> (그라데이션)
 //         방향: v 위→아래 · h 왼→오른 · d 왼쪽 위→오른쪽 아래 · u 왼쪽 아래→오른쪽 위
-//   디자인들: 쉼표로 구분. 각 디자인 = <종류><색들>:<픽셀 64자>
+//   디자인들: 쉼표로 구분. 각 디자인 = <종류><색들>:<픽셀 64자>:<블록 태그>[:<코드>]
 //     종류: B 일반 블록 · D 빈칸(장식) · T 가시 · U 단일 가시 · K 큰 가시 · I 얼음 · M 머신
 //           W 벽 · C 구름 · N 먹구름 · H 사다리 · O 공점
 //     색들: 16진 색상을 '+'로 연결 (예: 7bd67f+4caf50)
 //     픽셀: 위 행부터 8x8, '.'은 투명, 나머지는 색 번호(0-9a-zA-Z-_)
+//     코드: encodeURIComponent로 감싼 블록 코드 (없으면 생략)
 //   타일 목록: 행에서 쓰는 블록 글자의 뜻. 쉼표로 구분하고 순서대로 A, B, D, E, ... 글자가 배정된다.
 //     <디자인 번호>[p<위치 0-2>][r<회전 0-3>][m<방향 0 왼쪽 · 1 오른쪽>]  (예: 3p0r1)
 //     ~<길이>  밧줄 (예: ~5)
+//     c<이름>  이름 붙은 체크포인트 (이름은 encodeURIComponent)
 //   원점: 맨 위 행 맨 왼쪽 칸의 좌표 (음수 가능)
 //   행들: '/'로 구분. 칸마다 한 글자, 앞에 숫자가 붙으면 그만큼 반복 (예: 12. = 빈칸 12개)
-//     '.' 빈칸 · 'S' 스타트(정확히 1개) · 'C' 체크포인트 · '*' 별 · 그 외는 타일 목록의 글자
+//     '.' 빈칸 · 'S' 스타트(정확히 1개) · 'C' 이름 없는 체크포인트 · '*' 별 · 그 외는 타일 목록의 글자
 //   구역 행들: 행들과 같은 방식. '.' 없음 · 'Y' 노란 구역 · 'P' 보라 구역 · 'W' 물
+//
+// 이전 형식 PAR3(태그·코드·체크포인트 이름 없음), PAR2, PAR1도 읽을 수 있다.
 
 const TILE_SIZE = 32;
 const VIEW_W = 960; // 화면(캔버스) 크기
@@ -57,10 +61,15 @@ function ropeTile(length) {
   return { kind: 'rope', length };
 }
 
+function checkpointTile(name = '') {
+  return name ? { kind: 'checkpoint', name } : CHECKPOINT;
+}
+
 function sameTile(a, b) {
   if (a === b) return true;
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === 'rope') return a.length === b.length;
+  if (a.kind === 'checkpoint') return (a.name || '') === (b.name || '');
   return a.kind === 'design' && a.design === b.design && a.pos === b.pos && a.rot === b.rot && a.dir === b.dir;
 }
 
@@ -68,13 +77,14 @@ const cellKey = (x, y) => `${x},${y}`;
 
 class GameMap {
   constructor(designs = [], background = DEFAULT_BACKGROUND) {
-    this.designs = designs; // 이 맵에서 쓰는 블록 디자인 (팔레트 순서)
+    this.designs = []; // 이 맵에서 쓰는 블록 디자인 (팔레트 순서)
     this.background = background;
     this.cells = new Map(); // "x,y" → { x, y, tile }
     this.zones = new Map(); // "x,y" → { x, y, zone }
     this.start = null; // { x, y }
     this.version = 0; // 바뀔 때마다 증가 (캐시 갱신용)
     this.cache = {};
+    for (const d of designs) this.addDesign(d);
   }
 
   changed() {
@@ -151,6 +161,22 @@ class GameMap {
     return this.cache[key];
   }
 
+  nextTag() {
+    return this.designs.reduce((max, d) => Math.max(max, d.tag), 0) + 1;
+  }
+
+  findDesign(tag) {
+    return this.designs.find((d) => d.tag === tag) || null;
+  }
+
+  // 디자인을 팔레트에 넣는다. 태그가 없거나 이미 쓰는 태그면 새 태그를 붙인다.
+  addDesign(design, index = this.designs.length) {
+    if (!design.tag || this.findDesign(design.tag)) design.tag = this.nextTag();
+    this.designs.splice(index, 0, design);
+    this.changed();
+    return design;
+  }
+
   countUses(design) {
     let n = 0;
     for (const { tile } of this.cells.values()) if (tile.design === design) n++;
@@ -193,6 +219,9 @@ const TILE_CODE_LETTERS = 'ABDEFGHIJKLMNOPQRTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const COLOR_INDEX = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_';
 const MAX_RUN = 100000;
 
+// 코드·이름을 맵 문자열에 넣을 때: 구분 기호(; , / :)와 따옴표(')까지 감싼다 (worlds.js에 '...'로 붙여넣어도 안전)
+const encodeText = (text) => encodeURIComponent(text).replace(/'/g, '%27');
+
 // 블록 글자: 영문자를 다 쓰면 À(U+00C0)부터 이어서 쓴다.
 function tileCodeChar(i) {
   return i < TILE_CODE_LETTERS.length
@@ -211,20 +240,25 @@ function encodeDesign(design) {
     }
     return COLOR_INDEX[index.get(color)];
   });
-  return DesignTypes[design.type].code + colors.join('+') + ':' + pixels.join('');
+  let entry = DesignTypes[design.type].code + colors.join('+') + ':' + pixels.join('') + ':' + design.tag;
+  if (design.code) entry += ':' + encodeText(design.code);
+  return entry;
 }
 
-function decodeDesign(entry, n) {
+// withTag: PAR4 (태그와 코드가 있음)
+function decodeDesign(entry, n, withTag) {
   const type = DESIGN_TYPE_ORDER.find((t) => DesignTypes[t].code === entry[0]);
   if (!type) throw new Error(`${n}번째 디자인의 종류 '${entry[0]}'를 알 수 없습니다.`);
-  const sep = entry.indexOf(':');
-  if (sep < 0) throw new Error(`${n}번째 디자인에 ':'가 없습니다.`);
-  const colorPart = entry.slice(1, sep);
+  const fields = entry.split(':');
+  if (fields.length < 2 || fields.length > (withTag ? 4 : 2) || (withTag && fields.length < 3)) {
+    throw new Error(`${n}번째 디자인의 형식이 올바르지 않습니다.`);
+  }
+  const [head, pixelPart, tagPart, codePart] = fields;
+  const colorPart = head.slice(1);
   const colors = colorPart ? colorPart.split('+') : [];
   for (const c of colors) {
     if (!/^[0-9a-fA-F]{6}$/.test(c)) throw new Error(`${n}번째 디자인의 색 '${c}'가 올바르지 않습니다.`);
   }
-  const pixelPart = entry.slice(sep + 1);
   if (pixelPart.length !== DESIGN_SIZE * DESIGN_SIZE) {
     throw new Error(`${n}번째 디자인의 픽셀은 ${DESIGN_SIZE * DESIGN_SIZE}자여야 합니다. (현재 ${pixelPart.length}자)`);
   }
@@ -234,7 +268,26 @@ function decodeDesign(entry, n) {
     if (i < 0 || i >= colors.length) throw new Error(`${n}번째 디자인에 없는 색 번호 '${ch}'가 있습니다.`);
     return '#' + colors[i].toLowerCase();
   });
-  return new Design(type, pixels);
+  if (!withTag) return new Design(type, pixels);
+  const tag = Number(tagPart);
+  if (!Number.isInteger(tag) || tag < 1) throw new Error(`${n}번째 디자인의 블록 태그 '${tagPart}'가 올바르지 않습니다.`);
+  let code = '';
+  try {
+    code = codePart ? decodeURIComponent(codePart) : '';
+  } catch {
+    throw new Error(`${n}번째 디자인의 코드가 깨졌습니다.`);
+  }
+  return new Design(type, pixels, { tag, code });
+}
+
+function decodeDesigns(part, withTag) {
+  const designs = part ? part.split(',').map((e, i) => decodeDesign(e, i + 1, withTag)) : [];
+  const seen = new Set();
+  for (const d of designs) {
+    if (withTag && seen.has(d.tag)) throw new Error(`블록 태그 ${d.tag}이(가) 두 번 쓰였습니다.`);
+    seen.add(d.tag);
+  }
+  return designs;
 }
 
 function encodeBackground(bg) {
@@ -255,6 +308,7 @@ function decodeBackground(str) {
 
 function tileSpec(tile, designIndex) {
   if (tile.kind === 'rope') return '~' + tile.length;
+  if (tile.kind === 'checkpoint') return 'c' + encodeText(tile.name);
   const t = DesignTypes[tile.design.type];
   let spec = String(designIndex.get(tile.design));
   if (t.positioned) spec += 'p' + tile.pos;
@@ -264,6 +318,13 @@ function tileSpec(tile, designIndex) {
 }
 
 function parseTileSpec(spec, designs, n) {
+  if (spec[0] === 'c') {
+    try {
+      return checkpointTile(decodeURIComponent(spec.slice(1)));
+    } catch {
+      throw new Error(`타일 목록 ${n}번째의 체크포인트 이름이 깨졌습니다.`);
+    }
+  }
   let m = /^~(\d+)$/.exec(spec);
   if (m) {
     const length = Number(m[1]);
@@ -342,7 +403,7 @@ function decodeLayer(originPart, rowPart, what, put) {
 }
 
 const MapCodec = {
-  PREFIX: 'PAR3',
+  PREFIX: 'PAR4',
 
   encode(map) {
     const designIndex = new Map(map.designs.map((d, i) => [d, i]));
@@ -350,7 +411,7 @@ const MapCodec = {
     const codeOfSpec = new Map();
     const tiles = encodeLayer(map.cells, ({ tile }) => {
       if (tile.kind === 'start') return 'S';
-      if (tile.kind === 'checkpoint') return 'C';
+      if (tile.kind === 'checkpoint' && !tile.name) return 'C';
       if (tile.kind === 'star') return '*';
       const spec = tileSpec(tile, designIndex);
       if (!codeOfSpec.has(spec)) {
@@ -373,12 +434,12 @@ const MapCodec = {
     if (str.startsWith('PAR2;')) return decodePar2(str);
 
     const parts = str.split(';');
-    if (parts[0] !== this.PREFIX || parts.length !== 8) {
+    if ((parts[0] !== this.PREFIX && parts[0] !== 'PAR3') || parts.length !== 8) {
       throw new Error(`맵 문자열은 "${this.PREFIX};"로 시작하고 ';'로 나뉜 8부분이어야 합니다.`);
     }
-    const [, bgPart, designPart, legendPart, originPart, rowPart, zoneOriginPart, zoneRowPart] = parts;
+    const [version, bgPart, designPart, legendPart, originPart, rowPart, zoneOriginPart, zoneRowPart] = parts;
 
-    const designs = designPart ? designPart.split(',').map((e, i) => decodeDesign(e, i + 1)) : [];
+    const designs = decodeDesigns(designPart, version === 'PAR4');
     const map = new GameMap(designs, decodeBackground(bgPart));
 
     const tileOf = new Map([['S', START], ['C', CHECKPOINT], ['*', STAR]]);
@@ -411,7 +472,7 @@ function decodePar2(str) {
   const parts = str.split(';');
   if (parts.length !== 4) throw new Error('PAR2 맵 문자열은 ;로 나뉜 4부분이어야 합니다.');
   const [, designPart, originPart, rowPart] = parts;
-  const designs = designPart ? designPart.split(',').map((e, i) => decodeDesign(e, i + 1)) : [];
+  const designs = decodeDesigns(designPart, false);
   const tileOf = new Map([['S', START], ['C', CHECKPOINT], ['*', STAR]]);
   let i = 0;
   for (const design of designs) {

@@ -612,3 +612,214 @@ button.small {
   border-color: #ff6b4a;
   background: rgba(20, 24, 40, 0.85);
 }
+
+/* ---- 블록 태그 · 코드 표시 ---- */
+
+.tag-chip,
+.code-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: ui-monospace, Consolas, monospace;
+  line-height: 16px;
+}
+
+.tag-chip {
+  background: rgba(127, 224, 255, 0.18);
+  color: #7fe0ff;
+}
+
+.code-chip {
+  background: rgba(255, 210, 63, 0.18);
+  color: #ffd23f;
+}
+
+.palette-item {
+  position: relative;
+}
+
+.palette-item.coded::after {
+  content: '{}';
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  padding: 0 2px;
+  border-radius: 3px;
+  font: bold 9px ui-monospace, monospace;
+  color: #ffd23f;
+  background: #1b2033;
+  border: 1px solid #ffd23f;
+}
+
+/* ---- 선택 영역 · 칸 속성 ---- */
+
+.sel-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(80, 170, 255, 0.1);
+  border: 1px solid rgba(80, 170, 255, 0.3);
+}
+
+.sel-panel .panel-title {
+  margin-bottom: 0;
+}
+
+.props {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.prop-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prop-field input {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  color: #eef1f8;
+  background: #10131f;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+.stepper {
+  display: flex;
+  gap: 4px;
+}
+
+.stepper input {
+  flex: 1;
+  text-align: center;
+}
+
+/* ---- 코드 편집 ---- */
+
+.modal-box.code-box {
+  width: min(820px, 96%);
+  max-height: 96%;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-body {
+  display: flex;
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+}
+
+.code-editor {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  height: 340px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: #10131f;
+  overflow: hidden;
+}
+
+.code-lines {
+  padding: 8px 6px;
+  min-width: 34px;
+  text-align: right;
+  font: 13px/1.5 ui-monospace, Consolas, monospace;
+  color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  user-select: none;
+}
+
+.code-lines .bad {
+  color: #ff7b7b;
+  font-weight: 700;
+}
+
+.code-editor textarea {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  outline: none;
+  resize: none;
+  font: 13px/1.5 ui-monospace, Consolas, monospace;
+  color: #eef1f8;
+  background: transparent;
+  white-space: pre;
+  overflow: auto;
+  tab-size: 4;
+}
+
+.code-help {
+  width: 260px;
+  height: 340px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.code-help-title {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.7;
+}
+
+.code-help-title:first-child {
+  margin-top: 0;
+}
+
+.code-help-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 4px 8px;
+  text-align: left;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: transparent;
+}
+
+.code-help-item code {
+  font: 12px ui-monospace, Consolas, monospace;
+  color: #ffd23f;
+}
+
+.code-help-item span {
+  opacity: 0.75;
+}
+
+.code-status {
+  min-height: 18px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.code-status.ok {
+  color: #7bd67f;
+}
+
+.code-status.bad {
+  color: #ff7b7b;
+}
+
+.sel-panel .panel-actions {
+  flex-wrap: wrap;
+}
+
+.sel-panel .panel-actions button {
+  flex: 1 0 auto;
+  white-space: nowrap;
+}

@@ -46,6 +46,7 @@ const Render = {
           ctx.drawImage(art, -T / 2 + offset, -T / 2);
           ctx.restore();
         } else ctx.drawImage(art, sx, sy);
+        if (!info && tile.design.code) this.codeBadge(ctx, sx, sy); // 에디터: 코드가 든 블록 표시
         break;
       }
       case 'start':
@@ -54,6 +55,7 @@ const Render = {
       case 'checkpoint': {
         const on = !info || info.progress.checkpoints.has(key);
         this.flag(ctx, sx, sy, on ? '#4cd964' : '#9aa0ad', info?.currentKey === key);
+        if (tile.name) this.label(ctx, tile.name, sx + T / 2, sy - 3);
         break;
       }
       case 'star':
@@ -61,6 +63,36 @@ const Render = {
         break;
       case 'rope':
         break; // 밧줄은 ropes()에서 따로 그림 (고정점보다 아래까지 늘어지므로)
+    }
+  },
+
+  // 코드 블록(움직이는 블록): 코드로 돌린 각도·투명도·바꾼 픽셀까지 반영
+  entities(ctx, entities, camX, camY, info) {
+    const T = TILE_SIZE;
+    for (const e of entities) {
+      if (!e.visible || e.tran >= 100) continue;
+      const sx = e.x * T - camX;
+      const sy = e.y * T - camY;
+      if (sx < -T * 2 || sx > VIEW_W + T || sy < -T * 2 || sy > VIEW_H + T) continue;
+      const type = e.type;
+      let art;
+      if (e.pixels) {
+        if (!e.art || e.art.version !== e.pixelsVersion || e.art.design !== e.tile.design) {
+          const canvas = document.createElement('canvas');
+          canvas.width = canvas.height = T;
+          DesignArt.draw(canvas.getContext('2d'), { type, pixels: e.pixels }, 0, 0, T);
+          e.art = { version: e.pixelsVersion, design: e.tile.design, canvas };
+        }
+        art = e.art.canvas;
+      } else art = DesignArt.tile(e.tile.design);
+      const press = info?.cloudPress?.entity === e ? Math.round(info.cloudPress.amount * 6) : 0;
+      ctx.save();
+      ctx.globalAlpha = 1 - e.tran / 100;
+      ctx.translate(sx + T / 2, sy + T / 2 + press);
+      ctx.rotate((e.tile.rot * 90 + e.angle) * DEG);
+      if (type === 'machine') this.machine(ctx, art, -T / 2, -T / 2, e.tile.dir);
+      else ctx.drawImage(art, -T / 2 + (type === 'spike1' ? Math.round(((e.tile.pos - 1) * T) / 3) : 0), -T / 2);
+      ctx.restore();
     }
   },
 
@@ -176,6 +208,110 @@ const Render = {
     ctx.stroke();
   },
 
+  // 작은 글씨 이름표 (체크포인트 이름 등)
+  label(ctx, text, cx, bottomY) {
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.strokeText(text, cx, bottomY);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, cx, bottomY);
+  },
+
+  codeBadge(ctx, sx, sy) {
+    ctx.fillStyle = 'rgba(20, 24, 40, 0.85)';
+    ctx.fillRect(sx + TILE_SIZE - 15, sy + 1, 14, 10);
+    ctx.font = 'bold 9px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffd23f';
+    ctx.fillText('{}', sx + TILE_SIZE - 8, sy + 6.5);
+  },
+
+  // 에디터: 블록마다 블록 태그 번호
+  tags(ctx, map, camX, camY) {
+    const T = TILE_SIZE;
+    const { x0, x1, y0, y1 } = this.visible(camX, camY);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const tile = map.get(x, y);
+        if (!tile || tile.kind !== 'design') continue;
+        const text = String(tile.design.tag);
+        const sx = x * T - camX;
+        const sy = y * T - camY;
+        const w = ctx.measureText(text).width + 4;
+        ctx.fillStyle = 'rgba(20, 24, 40, 0.8)';
+        ctx.fillRect(sx + 1, sy + T - 13, w, 12);
+        ctx.fillStyle = '#7fe0ff';
+        ctx.fillText(text, sx + 3, sy + T - 1);
+      }
+    }
+  },
+
+  // 에디터: 선택 영역 { x0, y0, x1, y1 } (칸, 끝 포함)
+  selection(ctx, sel, camX, camY) {
+    const T = TILE_SIZE;
+    const x = sel.x0 * T - camX;
+    const y = sel.y0 * T - camY;
+    const w = (sel.x1 - sel.x0 + 1) * T;
+    const h = (sel.y1 - sel.y0 + 1) * T;
+    ctx.fillStyle = 'rgba(80, 170, 255, 0.15)';
+    ctx.fillRect(x, y, w, h);
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.lineDashOffset = -this.time * 20;
+    ctx.strokeStyle = '#ffffff';
+    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    ctx.setLineDash([]);
+    ctx.lineDashOffset = 0;
+  },
+
+  // 에디터: 복사한 영역을 (x, y)를 왼쪽 위로 해서 반투명하게
+  clipboard(ctx, clip, x, y, camX, camY) {
+    const T = TILE_SIZE;
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    for (const c of clip.cells) {
+      const sx = (x + c.dx) * T - camX;
+      const sy = (y + c.dy) * T - camY;
+      if (c.zone) {
+        ctx.fillStyle = ZoneTypes[c.zone].color;
+        ctx.fillRect(sx, sy, T, T);
+      }
+      if (c.tile?.kind === 'rope') this.rope(ctx, x + c.dx, y + c.dy, c.tile.length, 0, camX, camY);
+      else if (c.tile) this.tile(ctx, c.tile, sx, sy, '', null);
+    }
+    ctx.restore();
+    ctx.strokeStyle = '#7fe0ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x * T - camX + 1, y * T - camY + 1, clip.w * T - 2, clip.h * T - 2);
+  },
+
+  // 선택 도구 아이콘: 점선 사각형과 화살표
+  selectIcon(ctx) {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(4, 4, 20, 20);
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ffd23f';
+    ctx.beginPath();
+    ctx.moveTo(15, 13);
+    ctx.lineTo(28, 22);
+    ctx.lineTo(22, 23);
+    ctx.lineTo(25, 29);
+    ctx.lineTo(22, 30);
+    ctx.lineTo(19, 24);
+    ctx.lineTo(15, 28);
+    ctx.closePath();
+    ctx.fill();
+  },
+
   // 팔레트 아이콘용: 구역 칸 하나
   zoneIcon(ctx, zone) {
     ctx.fillStyle = ZoneTypes[zone].color.replace(/[\d.]+\)$/, '0.75)');
@@ -246,7 +382,7 @@ const Render = {
       ctx.fillStyle = ZoneTypes[tool.zone].color;
       ctx.fillRect(sx, sy, T, T);
     } else if (tool.kind === 'rope') this.rope(ctx, x, y, 1, 0, camX, camY);
-    else if (tool.kind !== 'erase') this.tile(ctx, SPECIAL_TILES[tool.kind], sx, sy, '', null);
+    else if (tool.kind !== 'erase' && tool.kind !== 'select') this.tile(ctx, SPECIAL_TILES[tool.kind], sx, sy, '', null);
     ctx.restore();
     ctx.strokeStyle = tool.kind === 'erase' ? '#ff5252' : '#ffffff';
     ctx.lineWidth = 2;

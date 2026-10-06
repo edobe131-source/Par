@@ -34,6 +34,7 @@
     <div id="hud-editor" class="hud hidden">
       <span id="editor-title" class="badge"></span>
       <span class="spacer"></span>
+      <button id="btn-tags" type="button" title="블록마다 블록 태그 번호 보기">태그 <kbd>T</kbd></button>
       <button id="btn-bg" type="button">배경</button>
       <button id="btn-test" type="button">테스트 <kbd>P</kbd></button>
       <button id="btn-save" type="button">저장 <kbd>Ctrl+S</kbd></button>
@@ -53,6 +54,7 @@
         <div id="palette-designs" class="palette-grid"></div>
       </div>
       <div id="palette-info" class="palette-info"></div>
+      <div id="sel-panel" class="panel-section sel-panel hidden"></div>
       <div id="attr-pos" class="panel-section hidden">
         <div class="panel-title">위치 <kbd>Q</kbd></div>
         <div class="seg">
@@ -78,7 +80,8 @@
         </div>
       </div>
       <div class="panel-actions">
-        <button id="btn-design-edit" type="button" class="small">편집</button>
+        <button id="btn-design-code" type="button" class="small" title="이 블록에 코드 넣기/편집">코드</button>
+        <button id="btn-design-edit" type="button" class="small" title="그림 편집">편집</button>
         <button id="btn-design-dup" type="button" class="small">복제</button>
         <button id="btn-design-del" type="button" class="small">삭제</button>
       </div>
@@ -86,7 +89,7 @@
     <div id="hint-editor" class="statusbar hidden">
       <span id="editor-status"></span>
       <span class="spacer"></span>
-      <span id="editor-help">좌클릭 놓기 · 우클릭 지우기 · Alt+클릭 집기 · R 회전/방향 · Q 위치 · WASD/방향키/휠/가운데 드래그 이동</span>
+      <span id="editor-help">좌클릭 놓기 · 우클릭 지우기 · Alt+클릭 집기 · R 회전/방향 · Q 위치 · Ctrl+C/X/V · Del · T 태그 · WASD/휠 이동</span>
     </div>
 
     <!-- 체크포인트 이동 -->
@@ -156,6 +159,26 @@
       </div>
     </div>
 
+    <!-- 블록 코드 -->
+    <div id="modal-code" class="modal hidden">
+      <div class="modal-box code-box">
+        <h2 id="code-title">코드</h2>
+        <p id="code-note" class="desc"></p>
+        <div class="code-body">
+          <div class="code-editor">
+            <div id="code-lines" class="code-lines"></div>
+            <textarea id="code-text" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+          </div>
+          <div id="code-help" class="code-help"></div>
+        </div>
+        <p id="code-status" class="code-status"></p>
+        <div class="row">
+          <button type="button" data-close>취소</button>
+          <button type="button" id="code-save" class="primary">저장 <kbd>Ctrl+S</kbd></button>
+        </div>
+      </div>
+    </div>
+
     <!-- 배경 -->
     <div id="modal-bg" class="modal hidden">
       <div class="modal-box bg-box">
@@ -185,11 +208,13 @@
   <script src="js/input.js"></script>
   <script src="js/modal.js"></script>
   <script src="js/render.js"></script>
+  <script src="js/script.js"></script>
   <script src="js/play.js"></script>
   <script src="js/editor.js"></script>
   <script src="js/editor-panel.js"></script>
   <script src="js/color-picker.js"></script>
   <script src="js/design-dialog.js"></script>
+  <script src="js/code-dialog.js"></script>
   <script src="js/background-dialog.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/main.js"></script>

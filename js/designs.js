@@ -80,8 +80,11 @@ const Shapes = {
 
 class Design {
   // pixels: 64칸, 각 칸은 '#rrggbb' 또는 null(투명)
-  constructor(type, pixels = new Array(DESIGN_SIZE * DESIGN_SIZE).fill(null)) {
+  // tag: 블록 태그 (맵 안에서 디자인마다 다른 번호, 0이면 맵에 넣을 때 배정) · code: 블록 코드 (없으면 '')
+  constructor(type, pixels = new Array(DESIGN_SIZE * DESIGN_SIZE).fill(null), { tag = 0, code = '' } = {}) {
     this.type = type;
+    this.tag = tag;
+    this.code = code;
     this.version = 0; // 바뀔 때마다 증가 (그림 캐시 갱신용)
     this.setPixels(pixels);
   }
@@ -92,8 +95,9 @@ class Design {
     this.version++;
   }
 
+  // 태그와 코드까지 그대로 복사 (맵 복사용). 팔레트에서 복제할 땐 맵이 새 태그를 붙인다.
   clone() {
-    return new Design(this.type, this.pixels);
+    return new Design(this.type, this.pixels, { tag: this.tag, code: this.code });
   }
 }
 

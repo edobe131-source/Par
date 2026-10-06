@@ -163,6 +163,7 @@
 
   const designDialog = new DesignDialog();
   const backgroundDialog = new BackgroundDialog();
+  const codeDialog = new CodeDialog();
   const panel = new EditorPanel(el.editorPanel, {
     onNewDesign: (type) =>
       designDialog.open({
@@ -179,6 +180,13 @@
         pixels: design.pixels,
         isNew: false,
         onSave: (t, pixels) => state.editor.updateDesign(design, pixels),
+      }),
+    // cell: 선택 도구로 고른 칸 (그 칸의 블록에 코드를 넣음), 팔레트에서 열면 null
+    onEditCode: (design, cell) =>
+      codeDialog.open({
+        design,
+        isNew: !design.code,
+        onSave: (code) => state.editor.saveCode(design, code, cell),
       }),
   });
 
@@ -208,6 +216,7 @@
     el.btnTest.classList.toggle('active', testing);
     el.editorHelp.classList.toggle('hidden', testing);
     el.editorPanel.classList.toggle('hidden', testing);
+    $('#btn-tags').classList.toggle('active', editor.showTags);
     panel.render();
   }
 
@@ -216,6 +225,7 @@
     else state.editor.startTest();
   });
   $('#btn-save').addEventListener('click', () => state.editor.save(false));
+  $('#btn-tags').addEventListener('click', () => state.editor.toggleTags());
   $('#btn-bg').addEventListener('click', () => {
     const editor = state.editor;
     if (editor.test) editor.stopTest();
@@ -261,11 +271,14 @@
 
   // ---- 공통 키 / 포커스 ----
 
+  // 에디터 Ctrl 단축키: 저장·복사·잘라내기·붙여넣기 (입력칸에 쓰는 중이면 그 입력칸 몫)
   window.addEventListener('keydown', (e) => {
-    if (state.screen === 'editor' && (e.ctrlKey || e.metaKey) && e.code === 'KeyS') {
-      e.preventDefault();
-      state.editor.save(false);
-    }
+    if (state.screen !== 'editor' || state.editor.test || !(e.ctrlKey || e.metaKey)) return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    const actions = { KeyS: () => state.editor.save(false), KeyC: () => state.editor.copy(), KeyX: () => state.editor.cut(), KeyV: () => state.editor.startPaste() };
+    if (!actions[e.code]) return;
+    e.preventDefault();
+    actions[e.code]();
   });
 
   // 버튼이 포커스를 잡으면 Space(점프)가 버튼을 다시 누르므로 포커스를 주지 않는다.
@@ -288,11 +301,11 @@
   function update(dt) {
     if (state.screen === 'play') {
       if (Input.wasPressed('Escape')) return leaveWorld();
-      if (Input.wasPressed('KeyC')) return openCheckpoints(state.play);
+      if (state.play.keyPressed('KeyC')) return openCheckpoints(state.play); // noKey(c)로 막을 수 있음
       state.play.update(dt);
     } else if (state.screen === 'editor') {
       const test = state.editor.test;
-      if (test && Input.wasPressed('KeyC')) return openCheckpoints(test);
+      if (test && test.keyPressed('KeyC')) return openCheckpoints(test);
       state.editor.update(dt);
     }
   }
