@@ -5,16 +5,17 @@
 //   - 구역: 노란 구역(2단 점프) · 보라 구역(무한 점프) · 물 중 하나 (타일과 겹쳐 놓을 수 있음)
 //
 // 맵 문자열 형식 (하나의 문자열, ';'로 나뉜 8부분):
-//   PAR4;<배경>;<디자인들>;<타일 목록>;<원점x>,<원점y>;<행들>;<구역 원점x>,<구역 원점y>;<구역 행들>
+//   PAR5;<배경>;<디자인들>;<타일 목록>;<원점x>,<원점y>;<행들>;<구역 원점x>,<구역 원점y>;<구역 행들>
 //
 //   배경: p0 / p1 / p2 (기본 배경 초원·노을·밤) · s<색> (단색) · g<색>+<색>+<방향> (그라데이션)
 //         방향: v 위→아래 · h 왼→오른 · d 왼쪽 위→오른쪽 아래 · u 왼쪽 아래→오른쪽 위
-//   디자인들: 쉼표로 구분. 각 디자인 = <종류><색들>:<픽셀 64자>:<블록 태그>[:<코드>]
+//   디자인들: 쉼표로 구분. 각 디자인 = <종류><색들>:<픽셀 64자>:<블록 태그>:<설정>:<코드>
 //     종류: B 일반 블록 · D 빈칸(장식) · T 가시 · U 단일 가시 · K 큰 가시 · I 얼음 · M 머신
 //           W 벽 · C 구름 · N 먹구름 · H 사다리 · O 공점
 //     색들: 16진 색상을 '+'로 연결 (예: 7bd67f+4caf50)
-//     픽셀: 위 행부터 8x8, '.'은 투명, 나머지는 색 번호(0-9a-zA-Z-_)
-//     코드: encodeURIComponent로 감싼 블록 코드 (없으면 생략)
+//     픽셀: 위 행부터 8x8, '.' 비움(판정 없음) · '~' 투명(판정 있음) · 나머지는 색 번호(0-9a-zA-Z-_)
+//     설정: 'k' 죽어도 진행 (없으면 빈칸)
+//     코드: encodeURIComponent로 감싼 블록 코드 (없으면 빈칸)
 //   타일 목록: 행에서 쓰는 블록 글자의 뜻. 쉼표로 구분하고 순서대로 A, B, D, E, ... 글자가 배정된다.
 //     <디자인 번호>[p<위치 0-2>][r<회전 0-3>][m<방향 0 왼쪽 · 1 오른쪽>]  (예: 3p0r1)
 //     ~<길이>  밧줄 (예: ~5)
@@ -24,7 +25,7 @@
 //     '.' 빈칸 · 'S' 스타트(정확히 1개) · 'C' 이름 없는 체크포인트 · '*' 별 · 그 외는 타일 목록의 글자
 //   구역 행들: 행들과 같은 방식. '.' 없음 · 'Y' 노란 구역 · 'P' 보라 구역 · 'W' 물
 //
-// 이전 형식 PAR3(태그·코드·체크포인트 이름 없음), PAR2, PAR1도 읽을 수 있다.
+// 이전 형식 PAR4(설정·투명 픽셀 없음), PAR3(태그·코드·체크포인트 이름 없음), PAR2, PAR1도 읽을 수 있다.
 
 const TILE_SIZE = 32;
 const VIEW_W = 960; // 화면(캔버스) 크기
@@ -234,26 +235,27 @@ function encodeDesign(design) {
   const index = new Map();
   const pixels = design.pixels.map((color) => {
     if (!color) return '.';
+    if (color === CLEAR) return '~';
     if (!index.has(color)) {
       index.set(color, colors.length);
       colors.push(color.slice(1));
     }
     return COLOR_INDEX[index.get(color)];
   });
-  let entry = DesignTypes[design.type].code + colors.join('+') + ':' + pixels.join('') + ':' + design.tag;
-  if (design.code) entry += ':' + encodeText(design.code);
-  return entry;
+  const flags = design.keep ? 'k' : '';
+  return [DesignTypes[design.type].code + colors.join('+'), pixels.join(''), design.tag, flags, encodeText(design.code || '')].join(':');
 }
 
-// withTag: PAR4 (태그와 코드가 있음)
-function decodeDesign(entry, n, withTag) {
+// version: PAR5 (태그·설정·코드) · PAR4 (태그·코드) · 그 이전 (픽셀만)
+function decodeDesign(entry, n, version) {
   const type = DESIGN_TYPE_ORDER.find((t) => DesignTypes[t].code === entry[0]);
   if (!type) throw new Error(`${n}번째 디자인의 종류 '${entry[0]}'를 알 수 없습니다.`);
   const fields = entry.split(':');
-  if (fields.length < 2 || fields.length > (withTag ? 4 : 2) || (withTag && fields.length < 3)) {
-    throw new Error(`${n}번째 디자인의 형식이 올바르지 않습니다.`);
-  }
-  const [head, pixelPart, tagPart, codePart] = fields;
+  const ok = version === 'PAR5' ? fields.length === 5 : version === 'PAR4' ? fields.length === 3 || fields.length === 4 : fields.length === 2;
+  if (!ok) throw new Error(`${n}번째 디자인의 형식이 올바르지 않습니다.`);
+  const [head, pixelPart, tagPart] = fields;
+  const flagPart = version === 'PAR5' ? fields[3] : '';
+  const codePart = version === 'PAR5' ? fields[4] : fields[3];
   const colorPart = head.slice(1);
   const colors = colorPart ? colorPart.split('+') : [];
   for (const c of colors) {
@@ -264,11 +266,12 @@ function decodeDesign(entry, n, withTag) {
   }
   const pixels = [...pixelPart].map((ch) => {
     if (ch === '.') return null;
+    if (ch === '~' && version === 'PAR5') return CLEAR;
     const i = COLOR_INDEX.indexOf(ch);
     if (i < 0 || i >= colors.length) throw new Error(`${n}번째 디자인에 없는 색 번호 '${ch}'가 있습니다.`);
     return '#' + colors[i].toLowerCase();
   });
-  if (!withTag) return new Design(type, pixels);
+  if (version !== 'PAR4' && version !== 'PAR5') return new Design(type, pixels);
   const tag = Number(tagPart);
   if (!Number.isInteger(tag) || tag < 1) throw new Error(`${n}번째 디자인의 블록 태그 '${tagPart}'가 올바르지 않습니다.`);
   let code = '';
@@ -277,14 +280,14 @@ function decodeDesign(entry, n, withTag) {
   } catch {
     throw new Error(`${n}번째 디자인의 코드가 깨졌습니다.`);
   }
-  return new Design(type, pixels, { tag, code });
+  return new Design(type, pixels, { tag, code, keep: flagPart.includes('k') });
 }
 
-function decodeDesigns(part, withTag) {
-  const designs = part ? part.split(',').map((e, i) => decodeDesign(e, i + 1, withTag)) : [];
+function decodeDesigns(part, version) {
+  const designs = part ? part.split(',').map((e, i) => decodeDesign(e, i + 1, version)) : [];
   const seen = new Set();
   for (const d of designs) {
-    if (withTag && seen.has(d.tag)) throw new Error(`블록 태그 ${d.tag}이(가) 두 번 쓰였습니다.`);
+    if (d.tag && seen.has(d.tag)) throw new Error(`블록 태그 ${d.tag}이(가) 두 번 쓰였습니다.`);
     seen.add(d.tag);
   }
   return designs;
@@ -403,7 +406,7 @@ function decodeLayer(originPart, rowPart, what, put) {
 }
 
 const MapCodec = {
-  PREFIX: 'PAR4',
+  PREFIX: 'PAR5',
 
   encode(map) {
     const designIndex = new Map(map.designs.map((d, i) => [d, i]));
@@ -434,12 +437,12 @@ const MapCodec = {
     if (str.startsWith('PAR2;')) return decodePar2(str);
 
     const parts = str.split(';');
-    if ((parts[0] !== this.PREFIX && parts[0] !== 'PAR3') || parts.length !== 8) {
+    if (!['PAR3', 'PAR4', 'PAR5'].includes(parts[0]) || parts.length !== 8) {
       throw new Error(`맵 문자열은 "${this.PREFIX};"로 시작하고 ';'로 나뉜 8부분이어야 합니다.`);
     }
     const [version, bgPart, designPart, legendPart, originPart, rowPart, zoneOriginPart, zoneRowPart] = parts;
 
-    const designs = decodeDesigns(designPart, version === 'PAR4');
+    const designs = decodeDesigns(designPart, version);
     const map = new GameMap(designs, decodeBackground(bgPart));
 
     const tileOf = new Map([['S', START], ['C', CHECKPOINT], ['*', STAR]]);
@@ -472,7 +475,7 @@ function decodePar2(str) {
   const parts = str.split(';');
   if (parts.length !== 4) throw new Error('PAR2 맵 문자열은 ;로 나뉜 4부분이어야 합니다.');
   const [, designPart, originPart, rowPart] = parts;
-  const designs = decodeDesigns(designPart, false);
+  const designs = decodeDesigns(designPart, 'PAR2');
   const tileOf = new Map([['S', START], ['C', CHECKPOINT], ['*', STAR]]);
   let i = 0;
   for (const design of designs) {

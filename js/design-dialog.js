@@ -1,4 +1,5 @@
-// 블록 디자인 편집 창: 8x8 픽셀에 색을 찍는다. 빗금 칸은 모양 밖이라 투명으로 고정.
+// 블록 디자인 편집 창: 8x8 픽셀에 색을 찍는다. 어떤 종류든 8x8 전체를 쓸 수 있다.
+// '투명'은 안 보이지만 판정이 있고, '비우기'는 판정도 없다.
 
 class DesignDialog {
   constructor() {
@@ -10,11 +11,13 @@ class DesignDialog {
     this.grid = $('#design-grid');
     this.preview = $('#design-preview');
     this.btnTransparent = $('#design-transparent');
+    this.btnEmpty = $('#design-empty');
+    this.hoverEl = $('#design-hover');
     this.usedEl = $('#design-used');
 
     this.type = 'block';
     this.pixels = [];
-    this.color = '#ffffff'; // null이면 투명
+    this.color = '#ffffff'; // CLEAR(투명) · null(비우기)도 됨
     this.paintValue = undefined; // 드래그 중에 칠하는 값 (undefined면 칠하는 중 아님)
     this.onSave = null;
 
@@ -45,25 +48,32 @@ class DesignDialog {
         if (i !== null) this.setColor(this.pixels[i]);
         return;
       }
-      this.paintValue = e.button === 2 ? null : this.color;
+      this.paintValue = e.button === 2 ? null : this.color; // 우클릭: 비우기
       this.paintAt(e);
     });
     this.grid.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('mousemove', (e) => {
       if (this.paintValue !== undefined) this.paintAt(e);
     });
+    this.grid.addEventListener('mousemove', (e) => {
+      const i = this.pixelAt(e);
+      this.hoverEl.textContent = i === null ? '' : `${i + 1}번 픽셀`; // 코드의 px(A, 색)·pxColor(A) 번호
+    });
+    this.grid.addEventListener('mouseleave', () => {
+      this.hoverEl.textContent = '';
+    });
     window.addEventListener('mouseup', () => {
       this.paintValue = undefined;
     });
 
-    this.btnTransparent.addEventListener('click', () => this.setColor(null));
+    this.btnTransparent.addEventListener('click', () => this.setColor(CLEAR));
+    this.btnEmpty.addEventListener('click', () => this.setColor(null));
     this.usedEl.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-color]');
       if (btn) this.setColor(btn.dataset.color);
     });
     $('#design-fill').addEventListener('click', () => {
-      const mask = Shapes.mask(this.type);
-      this.pixels = this.pixels.map((c, i) => (mask[i] ? this.color : null));
+      this.pixels = this.pixels.map(() => this.color);
       this.render();
     });
     $('#design-save').addEventListener('click', () => {
@@ -86,7 +96,7 @@ class DesignDialog {
 
   setColor(color) {
     this.color = color;
-    if (color) this.picker.setColor(color);
+    if (color && color !== CLEAR) this.picker.setColor(color);
     this.renderUsed();
   }
 
@@ -100,7 +110,7 @@ class DesignDialog {
 
   paintAt(e) {
     const i = this.pixelAt(e);
-    if (i === null || !Shapes.mask(this.type)[i] || this.pixels[i] === this.paintValue) return;
+    if (i === null || this.pixels[i] === this.paintValue) return;
     this.pixels[i] = this.paintValue;
     this.render();
   }
@@ -115,36 +125,36 @@ class DesignDialog {
     const ctx = this.grid.getContext('2d');
     const size = this.grid.width;
     const cell = size / DESIGN_SIZE;
-    const mask = Shapes.mask(this.type);
     ctx.clearRect(0, 0, size, size);
     this.pixels.forEach((color, i) => {
       const x = (i % DESIGN_SIZE) * cell;
       const y = Math.floor(i / DESIGN_SIZE) * cell;
-      if (!mask[i]) {
-        // 고정된 투명 영역: 빗금
-        ctx.fillStyle = '#262b40';
-        ctx.fillRect(x, y, cell, cell);
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-        ctx.lineWidth = 2;
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(x, y, cell, cell);
-        ctx.clip();
-        ctx.beginPath();
-        for (let k = -cell; k < cell; k += 8) {
-          ctx.moveTo(x + k, y + cell);
-          ctx.lineTo(x + k + cell, y);
-        }
-        ctx.stroke();
-        ctx.restore();
-      } else if (!color) {
-        // 투명: 체크무늬
+      if (!color || color === CLEAR) {
+        // 비움·투명: 체크무늬
         const h = cell / 2;
         ctx.fillStyle = '#d5d9e3';
         ctx.fillRect(x, y, cell, cell);
         ctx.fillStyle = '#f1f3f7';
         ctx.fillRect(x, y, h, h);
         ctx.fillRect(x + h, y + h, h, h);
+        if (color === CLEAR) {
+          // 투명(판정 있음): 하늘색 빗금
+          ctx.fillStyle = 'rgba(80, 180, 255, 0.35)';
+          ctx.fillRect(x, y, cell, cell);
+          ctx.strokeStyle = 'rgba(40, 120, 220, 0.7)';
+          ctx.lineWidth = 2;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x, y, cell, cell);
+          ctx.clip();
+          ctx.beginPath();
+          for (let k = -cell; k < cell; k += 8) {
+            ctx.moveTo(x + k, y + cell);
+            ctx.lineTo(x + k + cell, y);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
       } else {
         ctx.fillStyle = color;
         ctx.fillRect(x, y, cell, cell);
@@ -162,23 +172,6 @@ class DesignDialog {
       ctx.lineTo(size, p);
     }
     ctx.stroke();
-
-    // 실제 모양 외곽선
-    const tris = Shapes.triangles(this.type);
-    if (tris) {
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
-      ctx.beginPath();
-      for (const [a, b, c] of tris) {
-        ctx.moveTo(a[0] * size, a[1] * size);
-        ctx.lineTo(b[0] * size, b[1] * size);
-        ctx.lineTo(c[0] * size, c[1] * size);
-        ctx.closePath();
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
   }
 
   // 왼쪽: 크게 한 칸, 오른쪽: 실제 크기로 2x2 붙여놓은 모습
@@ -197,7 +190,7 @@ class DesignDialog {
 
   // 이 디자인에 쓴 색들 (눌러서 다시 고르기)
   renderUsed() {
-    const colors = [...new Set(this.pixels.filter(Boolean))];
+    const colors = [...new Set(this.pixels.filter((c) => c && c !== CLEAR))];
     this.usedEl.replaceChildren(
       ...colors.map((c) => {
         const btn = document.createElement('button');
@@ -209,6 +202,7 @@ class DesignDialog {
         return btn;
       }),
     );
-    this.btnTransparent.classList.toggle('active', this.color === null);
+    this.btnTransparent.classList.toggle('active', this.color === CLEAR);
+    this.btnEmpty.classList.toggle('active', this.color === null);
   }
 }

@@ -138,16 +138,19 @@ class Editor {
 
   // 코드 저장. 코드가 없던 디자인에 처음 넣으면, 코드가 든 새 블록(새 태그)을 팔레트에 만들고
   // cell이 주어지면 그 칸의 블록을 새 블록으로 바꾼다. 이미 코드가 있던 디자인은 그 코드를 고친다.
-  saveCode(design, code, cell = null) {
+  // keep: '죽어도 진행' 설정
+  saveCode(design, code, cell = null, keep = false) {
     code = code.replace(/\s+$/, '');
     let target = design;
     if (design.code) {
       design.code = code;
+      design.keep = keep;
     } else {
       if (!code.trim()) return design;
       target = design.clone();
       target.tag = 0;
       target.code = code;
+      target.keep = keep;
       this.map.addDesign(target, this.map.designs.indexOf(design) + 1);
       if (cell) {
         const tile = this.map.get(cell.x, cell.y);

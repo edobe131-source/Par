@@ -12,6 +12,7 @@
 // - '#' 뒤는 주석 (단, #ff0000처럼 '#'+16진 6자리는 색깔 값)
 // - 반복(wT, until)은 한 바퀴마다 한 프레임 쉬고, wait(초)는 그만큼 쉰다.
 // - 좌표 단위는 칸, 각도는 도(0 위 · 90 오른쪽 · 180 아래 · 270 왼쪽), 투명도는 0(불투명)~100(완전 투명)
+// - 변수는 블록마다 따로. 이름이 '_'로 끝나는 변수(예: 점수_)는 그 월드의 모든 블록이 같이 쓴다.
 
 class ScriptError extends Error {
   constructor(line, message) {
@@ -23,7 +24,7 @@ class ScriptError extends Error {
 // 명령: 문장으로만 쓰고 값을 내지 않음. 값은 인자 개수.
 const SCRIPT_COMMANDS = {
   convert: 1, rot: 1, Tran: 1, TranPlus: 1, move: 2, px: 2, disapp: 0, appear: 0, wait: 1,
-  rotMove: 2, noKey: 1, yesKey: 1, caTp: 2, kill: 0,
+  rotMove: 2, noKey: 1, yesKey: 1, caTp: 2, kill: 0, perm: 0,
 };
 // 값을 내는 함수
 const SCRIPT_REPORTERS = {
@@ -288,7 +289,8 @@ function checkProgram(body) {
   const checkExpr = (e, line) => {
     switch (e.k) {
       case 'var':
-        if (!assigned.has(e.name)) throw new ScriptError(line, `변수 '${e.name}'에 값을 넣은 적이 없습니다. (예: ${e.name} = 0)`);
+        // '_'로 끝나는 변수는 다른 블록이 값을 넣을 수 있으니 검사하지 않음
+        if (!assigned.has(e.name) && !isShared(e.name)) throw new ScriptError(line, `변수 '${e.name}'에 값을 넣은 적이 없습니다. (예: ${e.name} = 0)`);
         break;
       case 'call': checkCall(e, line, false); break;
       case 'bin': checkExpr(e.l, line); checkExpr(e.r, line); break;
@@ -306,6 +308,8 @@ function checkProgram(body) {
   };
   walk(body);
 }
+
+const isShared = (name) => name.endsWith('_');
 
 const Script = {
   // 문법이 틀리면 ScriptError(line, message)를 던진다.
@@ -331,10 +335,12 @@ const DEG = Math.PI / 180;
 const tidy = (x) => Math.round(x * 1e10) / 1e10; // sin(180)이 0이 되도록 아주 작은 오차 정리
 
 // 블록 하나에서 도는 코드. api: 블록·캐릭터를 다루는 함수들 (play.js에서 제공)
+// shared: 월드 공통 변수('_'로 끝나는 이름) · vars: 이 블록의 변수 (perm()으로 저장해 둔 값에서 다시 시작할 때)
 class ScriptRunner {
-  constructor(program, api) {
+  constructor(program, api, shared = {}, vars = {}) {
     this.api = api;
-    this.vars = {};
+    this.shared = shared;
+    this.vars = { ...vars };
     this.line = 0;
     this.dt = 1 / 60;
     this.ops = 0;
@@ -365,8 +371,9 @@ class ScriptRunner {
       switch (s.k) {
         case 'assign': {
           const v = this.eval(s.e);
-          const old = this.vars[s.name] ?? 0;
-          this.vars[s.name] = s.op === '=' ? v : s.op === '+=' ? this.plus(old, v) : this.num(old) - this.num(v);
+          const store = isShared(s.name) ? this.shared : this.vars;
+          const old = store[s.name] ?? 0;
+          store[s.name] = s.op === '=' ? v : s.op === '+=' ? this.plus(old, v) : this.num(old) - this.num(v);
           break;
         }
         case 'cmd': {
@@ -426,7 +433,7 @@ class ScriptRunner {
   eval(e) {
     switch (e.k) {
       case 'lit': return e.v;
-      case 'var': return this.vars[e.name] ?? 0;
+      case 'var': return (isShared(e.name) ? this.shared : this.vars)[e.name] ?? 0;
       case 'flag': return !!this.api[e.name]();
       case 'not': return !this.truthy(this.eval(e.e));
       case 'neg': return -this.num(this.eval(e.e));

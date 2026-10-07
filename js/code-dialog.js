@@ -28,9 +28,13 @@ const CODE_HELP = [
     ['caCooX()', '캐릭터 x좌표 (칸)'],
     ['caCooY()', '캐릭터 y좌표 (칸)'],
     ['caTp(A, B)', '캐릭터를 칸 (A, B)로 보내기'],
-    ['kill()', '캐릭터 죽이기'],
+    ['kill()', '캐릭터 죽이기 (코드 블록은 처음부터 다시)'],
     ['noKey(left)', '키 막기: left right up down jump space 알파벳'],
     ['yesKey(left)', '막은 키 다시 풀기'],
+  ]],
+  ['저장 · 공통', [
+    ['perm()', '지금 상태를 저장 → 죽어도 이 상태에서 다시 시작'],
+    ['점수_ = 0', "이름이 '_'로 끝나는 변수는 월드의 모든 블록이 같이 씀"],
   ]],
   ['흐름', [
     ['if 조건:\n    ', '만일 조건이라면'],
@@ -63,6 +67,7 @@ class CodeDialog {
     this.text = $('#code-text');
     this.lines = $('#code-lines');
     this.statusEl = $('#code-status');
+    this.keepEl = $('#code-keep');
     this.onSave = null;
     this.checkTimer = 0;
     this.errorLine = 0;
@@ -94,6 +99,7 @@ class CodeDialog {
       ? '저장하면 이 코드가 든 새 블록(새 태그)이 팔레트에 생깁니다.'
       : '이 블록 태그로 놓은 모든 블록의 코드가 함께 바뀝니다.';
     this.text.value = design.code || '';
+    this.keepEl.checked = !!design.keep;
     this.onSave = onSave;
     this.changed();
     Modal.open(this.el, {
@@ -106,7 +112,7 @@ class CodeDialog {
   }
 
   save() {
-    this.onSave(this.text.value);
+    this.onSave(this.text.value, this.keepEl.checked);
     Modal.close();
   }
 

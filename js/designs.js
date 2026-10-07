@@ -1,107 +1,154 @@
-// 블록 디자인: 8x8 픽셀에 색을 찍어 만든 블록.
-// 사각형이 아닌 블록(가시류)은 모양 밖 픽셀이 투명으로 고정되고, 그릴 때도 모양대로 잘린다.
+// 블록 디자인: 8x8 픽셀에 색을 찍어 만든 블록. 어떤 종류든 8x8 전체를 쓸 수 있다.
+// 픽셀 값: '#rrggbb' 색 · 'clear' 투명(안 보이지만 판정 있음) · null 비움(판정 없음)
+// 블록의 판정은 그린 픽셀 모양 그대로다 (Hitbox 참고).
 
 const DESIGN_SIZE = 8;
+const PIXEL = TILE_SIZE / DESIGN_SIZE; // 픽셀 한 칸 = 4px
+const CLEAR = 'clear';
 
 // solid: 단단함 · hazard: 닿으면 사망 · rotatable: 90도 회전 · positioned: 왼/가운데/오른 위치 · directional: 좌우 방향
 const DesignTypes = {
-  block: { code: 'B', label: '일반 블록', desc: '단단한 블록', solid: true },
-  deco: { code: 'D', label: '빈칸 (장식)', desc: '통과할 수 있는 장식' },
+  block: { code: 'B', label: '일반 블록', desc: '단단한 블록 · R 회전', solid: true, rotatable: true },
+  deco: { code: 'D', label: '빈칸 (장식)', desc: '통과할 수 있는 장식 · R 회전', rotatable: true },
   spike3: { code: 'T', label: '가시', desc: '닿으면 죽음 · R 회전', hazard: true, rotatable: true },
   spike1: { code: 'U', label: '단일 가시', desc: '닿으면 죽음 · Q 위치 · R 회전', hazard: true, rotatable: true, positioned: true },
   bigspike: { code: 'K', label: '큰 가시', desc: '닿으면 죽음 · R 회전', hazard: true, rotatable: true },
-  ice: { code: 'I', label: '얼음', desc: '위에서 미끄러짐', solid: true },
+  ice: { code: 'I', label: '얼음', desc: '위에서 미끄러짐 · R 회전', solid: true, rotatable: true },
   machine: { code: 'M', label: '머신', desc: '위에 있으면 저절로 이동 · R 방향', solid: true, directional: true },
-  wall: { code: 'W', label: '벽', desc: '옆에 딱 붙어 있으면 계속 점프', solid: true },
-  cloud: { code: 'C', label: '구름', desc: '닿기만 하면 저절로 튀어오름' },
-  darkcloud: { code: 'N', label: '먹구름', desc: '닿으면 빠르게 떨어짐' },
-  ladder: { code: 'H', label: '사다리', desc: '↑↓로 오르내림 (Space로 점프)' },
-  airjump: { code: 'O', label: '공점', desc: '겹친 채로 점프하면 공중에서 점프' },
+  wall: { code: 'W', label: '벽', desc: '옆에 딱 붙어 있으면 계속 점프 · R 회전', solid: true, rotatable: true },
+  cloud: { code: 'C', label: '구름', desc: '닿기만 하면 저절로 튀어오름 · R 회전', rotatable: true },
+  darkcloud: { code: 'N', label: '먹구름', desc: '닿으면 빠르게 떨어짐 · R 회전', rotatable: true },
+  ladder: { code: 'H', label: '사다리', desc: '↑↓로 오르내림 (Space로 점프) · R 회전', rotatable: true },
+  airjump: { code: 'O', label: '공점', desc: '겹친 채로 점프하면 공중에서 점프 · R 회전', rotatable: true },
 };
 const DESIGN_TYPE_ORDER = Object.keys(DesignTypes);
 const SPIKE_POSITIONS = ['왼쪽', '가운데', '오른쪽'];
 
-function pointInTriangle(x, y, [a, b, c]) {
-  const d1 = (x - b[0]) * (a[1] - b[1]) - (a[0] - b[0]) * (y - b[1]);
-  const d2 = (x - c[0]) * (b[1] - c[1]) - (b[0] - c[0]) * (y - c[1]);
-  const d3 = (x - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (y - a[1]);
-  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
-  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
-  return !(hasNeg && hasPos);
+// 판정 종류: pixels(그린 픽셀 하나하나) · area(비어 있지 않은 픽셀을 감싸는 범위 하나) · none(판정 없음)
+// 통과하는 특수 블록(구름·먹구름·사다리·공점)은 가운데가 빈 그림(사다리 칸 사이, 고리 가운데)도 쓸 수 있게 범위로 판정한다.
+function hitKind(type) {
+  const t = DesignTypes[type];
+  if (t.solid || t.hazard) return 'pixels';
+  return type === 'deco' ? 'none' : 'area';
 }
 
-// 칸 중심 기준 시계 방향 90도 회전을 rot번
-function rotateUnitPoint([u, v], rot) {
-  for (let i = 0; i < rot; i++) [u, v] = [1 - v, u];
-  return [u, v];
-}
-
-const Shapes = {
-  // 칸 안 좌표(0~1)의 삼각형 목록. null이면 칸 전체를 채우는 사각형.
-  // 가시(1/3 크기 삼각형 3개), 단일 가시(1/3 크기 1개, pos 0 왼쪽 · 1 가운데 · 2 오른쪽), 큰 가시(칸 크기 1개)
-  // rot: 0 위 · 1 오른쪽 · 2 아래 · 3 왼쪽 (가시 끝이 향하는 방향)
-  triangles(type, pos = 1, rot = 0) {
-    const small = (i) => [[i / 3, 1], [(i + 0.5) / 3, 2 / 3], [(i + 1) / 3, 1]];
-    let tris;
-    switch (type) {
-      case 'spike3': tris = [small(0), small(1), small(2)]; break;
-      case 'spike1': tris = [small(pos)]; break;
-      case 'bigspike': tris = [[[0, 1], [0.5, 0], [1, 1]]]; break;
-      default: return null;
+// 가로로 이어진 픽셀을 묶고, 같은 폭이 아래로 이어지면 한 사각형으로 (픽셀 단위)
+function mergedPixelRects(pixels) {
+  const N = DESIGN_SIZE;
+  const out = [];
+  let open = [];
+  for (let y = 0; y < N; y++) {
+    const next = [];
+    for (let x = 0; x < N;) {
+      if (pixels[y * N + x] == null) {
+        x++;
+        continue;
+      }
+      const start = x;
+      while (x < N && pixels[y * N + x] != null) x++;
+      const above = open.find((r) => r.x === start && r.w === x - start);
+      if (above) {
+        above.h++;
+        next.push(above);
+      } else {
+        const r = { x: start, y, w: x - start, h: 1 };
+        out.push(r);
+        next.push(r);
+      }
     }
-    return rot ? tris.map((tri) => tri.map((pt) => rotateUnitPoint(pt, rot))) : tris;
-  },
+    open = next;
+  }
+  return out;
+}
 
-  // 칠할 수 있는 픽셀: 모양과 5% 넘게 겹치는 픽셀. 단일 가시는 가운데, 회전 없는 상태 기준.
-  maskCache: {},
-  mask(type) {
-    if (!this.maskCache[type]) {
-      const tris = this.triangles(type);
-      const N = DESIGN_SIZE;
-      const SUB = 8; // 픽셀당 8x8 표본
-      this.maskCache[type] = Array.from({ length: N * N }, (_, i) => {
-        if (!tris) return true;
-        const px = i % N;
-        const py = Math.floor(i / N);
-        let hits = 0;
-        for (let sy = 0; sy < SUB; sy++) {
-          for (let sx = 0; sx < SUB; sx++) {
-            const u = (px + (sx + 0.5) / SUB) / N;
-            const v = (py + (sy + 0.5) / SUB) / N;
-            if (tris.some((t) => pointInTriangle(u, v, t))) hits++;
-          }
+function pixelBounds(pixels) {
+  const N = DESIGN_SIZE;
+  let x0 = N, y0 = N, x1 = -1, y1 = -1;
+  pixels.forEach((c, i) => {
+    if (c == null) return;
+    const x = i % N, y = Math.floor(i / N);
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  });
+  return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+const Hitbox = {
+  // 판정 사각형들 (칸 왼쪽 위 기준 px). angle: 칸 가운데를 축으로 시계 방향 회전(도).
+  // 90도 단위가 아닌 각도는 픽셀마다 돌린 사각형의 바깥 상자로 판정한다.
+  rects(pixels, type, pos = 1, angle = 0) {
+    const kind = hitKind(type);
+    if (kind === 'none') return [];
+    const N = DESIGN_SIZE;
+    const shift = type === 'spike1' ? ((pos - 1) * N) / 3 : 0; // 단일 가시 위치
+    const a = ((angle % 360) + 360) % 360;
+    const bounds = kind === 'area' ? pixelBounds(pixels) : null;
+    let units;
+    if (a % 90 === 0) {
+      units = (kind === 'area' ? (bounds ? [bounds] : []) : mergedPixelRects(pixels)).map((r) => ({ ...r, x: r.x + shift }));
+      for (let k = 0; k < a / 90; k++) units = units.map((r) => ({ x: N - r.y - r.h, y: r.x, w: r.h, h: r.w }));
+    } else {
+      const c = Math.cos((a * Math.PI) / 180);
+      const s = Math.sin((a * Math.PI) / 180);
+      const boxes = kind === 'area'
+        ? (bounds ? [bounds] : [])
+        : pixels.flatMap((p, i) => (p == null ? [] : [{ x: i % N, y: Math.floor(i / N), w: 1, h: 1 }]));
+      units = boxes.map((b) => {
+        const xs = [];
+        const ys = [];
+        for (const [px, py] of [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]]) {
+          const dx = px + shift - N / 2;
+          const dy = py - N / 2;
+          xs.push(N / 2 + dx * c - dy * s);
+          ys.push(N / 2 + dx * s + dy * c);
         }
-        return hits / (SUB * SUB) > 0.05;
+        const x = Math.min(...xs);
+        const y = Math.min(...ys);
+        return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
       });
     }
-    return this.maskCache[type];
+    return units.map((r) => ({ x: r.x * PIXEL, y: r.y * PIXEL, w: r.w * PIXEL, h: r.h * PIXEL }));
+  },
+
+  // 칸에 놓인 블록용 (디자인이 바뀔 때까지 기억)
+  cache: new WeakMap(),
+  forTile(tile) {
+    const { design } = tile;
+    let entry = this.cache.get(design);
+    if (!entry || entry.version !== design.version) {
+      entry = { version: design.version, byKey: new Map() };
+      this.cache.set(design, entry);
+    }
+    const key = tile.pos * 4 + tile.rot;
+    if (!entry.byKey.has(key)) entry.byKey.set(key, this.rects(design.pixels, design.type, tile.pos, tile.rot * 90));
+    return entry.byKey.get(key);
   },
 };
 
 class Design {
-  // pixels: 64칸, 각 칸은 '#rrggbb' 또는 null(투명)
+  // pixels: 64칸 (값은 위 설명 참고)
   // tag: 블록 태그 (맵 안에서 디자인마다 다른 번호, 0이면 맵에 넣을 때 배정) · code: 블록 코드 (없으면 '')
-  constructor(type, pixels = new Array(DESIGN_SIZE * DESIGN_SIZE).fill(null), { tag = 0, code = '' } = {}) {
+  // keep: '죽어도 진행' — 캐릭터가 죽어도 이 블록의 코드는 처음부터 다시 하지 않고 계속 실행
+  constructor(type, pixels = new Array(DESIGN_SIZE * DESIGN_SIZE).fill(null), { tag = 0, code = '', keep = false } = {}) {
     this.type = type;
     this.tag = tag;
     this.code = code;
-    this.version = 0; // 바뀔 때마다 증가 (그림 캐시 갱신용)
+    this.keep = keep;
+    this.version = 0; // 바뀔 때마다 증가 (그림·판정 캐시 갱신용)
     this.setPixels(pixels);
   }
 
   setPixels(pixels) {
-    const mask = Shapes.mask(this.type);
-    this.pixels = pixels.map((c, i) => (mask[i] ? c : null));
+    this.pixels = pixels.slice();
     this.version++;
   }
 
-  // 태그와 코드까지 그대로 복사 (맵 복사용). 팔레트에서 복제할 땐 맵이 새 태그를 붙인다.
+  // 태그·코드·설정까지 그대로 복사 (맵 복사용). 팔레트에서 복제할 땐 맵이 새 태그를 붙인다.
   clone() {
-    return new Design(this.type, this.pixels, { tag: this.tag, code: this.code });
+    return new Design(this.type, this.pixels, { tag: this.tag, code: this.code, keep: this.keep });
   }
 }
 
-// 기본 디자인 견본. 글자 하나가 픽셀 하나, '.'은 투명.
+// 기본 디자인 견본. 글자 하나가 픽셀 하나, '.'은 비움.
 const SPIKE_COLORS = { l: '#e8ebf2', h: '#a3abbd' };
 const DESIGN_TEMPLATES = {
   grass: {
@@ -122,7 +169,7 @@ const DESIGN_TEMPLATES = {
   spike3: {
     type: 'spike3',
     colors: SPIKE_COLORS,
-    rows: ['........', '........', '........', '........', '........', '.h.lh.l.', 'lh.lh.lh', 'lhhlhllh'],
+    rows: ['........', '........', '........', '........', '........', '.l.lh.l.', 'llhlhllh', 'llhlhllh'],
   },
   spike1: {
     type: 'spike1',
@@ -204,41 +251,40 @@ function newDesignPixels(type) {
 const DesignArt = {
   cache: new WeakMap(),
 
-  // 디자인을 (x, y)에 size 크기로 그린다 (회전 없음). 모양 밖은 잘라낸다.
-  draw(ctx, design, x, y, size, pos = 1) {
-    const tris = Shapes.triangles(design.type, pos);
+  // 디자인을 (x, y)에 size 크기로 그린다 (회전 없음). design은 { type, pixels }만 있어도 된다.
+  // ghost: 에디터에서 투명 픽셀(판정만 있음)을 옅게 보여 줌
+  draw(ctx, design, x, y, size, pos = 1, ghost = false) {
     const s = size / DESIGN_SIZE;
     // 단일 가시는 가운데 기준으로 그린 그림을 위치만큼 옮긴다.
     const offset = design.type === 'spike1' ? ((pos - 1) * size) / 3 : 0;
-    ctx.save();
-    if (tris) {
-      ctx.beginPath();
-      for (const [a, b, c] of tris) {
-        ctx.moveTo(x + a[0] * size, y + a[1] * size);
-        ctx.lineTo(x + b[0] * size, y + b[1] * size);
-        ctx.lineTo(x + c[0] * size, y + c[1] * size);
-        ctx.closePath();
-      }
-      ctx.clip();
-    }
     design.pixels.forEach((color, i) => {
       if (!color) return;
+      const px = x + offset + (i % DESIGN_SIZE) * s;
+      const py = y + Math.floor(i / DESIGN_SIZE) * s;
+      if (color === CLEAR) {
+        if (!ghost) return;
+        ctx.fillStyle = 'rgba(127, 224, 255, 0.35)';
+        ctx.fillRect(px, py, s, s);
+        return;
+      }
       ctx.fillStyle = color;
-      ctx.fillRect(x + offset + (i % DESIGN_SIZE) * s, y + Math.floor(i / DESIGN_SIZE) * s, s, s);
+      ctx.fillRect(px, py, s, s);
     });
-    ctx.restore();
   },
 
   // 칸 크기로 미리 그려둔 캔버스 (디자인이 바뀌면 다시 그림). 단일 가시는 가운데 위치.
-  tile(design) {
+  tile(design, ghost = false) {
     let entry = this.cache.get(design);
     if (!entry || entry.version !== design.version) {
-      const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = TILE_SIZE;
-      this.draw(canvas.getContext('2d'), design, 0, 0, TILE_SIZE);
-      entry = { version: design.version, canvas };
+      entry = { version: design.version, canvases: {} };
       this.cache.set(design, entry);
     }
-    return entry.canvas;
+    if (!entry.canvases[ghost]) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = TILE_SIZE;
+      this.draw(canvas.getContext('2d'), design, 0, 0, TILE_SIZE, 1, ghost);
+      entry.canvases[ghost] = canvas;
+    }
+    return entry.canvases[ghost];
   },
 };

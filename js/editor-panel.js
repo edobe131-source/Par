@@ -129,7 +129,7 @@ class EditorPanel {
     for (const btn of this.toolsEl.children) btn.classList.toggle('active', btn.dataset.tool === toolId(tool));
 
     // 디자인 목록은 바뀌었을 때만 다시 만든다 (선택만 바뀔 때 다시 만들면 더블클릭이 끊김).
-    const signature = map.designs.map((d) => `${d.version}:${d.tag}:${d.code ? 1 : 0}`);
+    const signature = map.designs.map((d) => `${d.version}:${d.tag}:${d.code ? 1 : 0}:${d.keep ? 1 : 0}`);
     const same = this.shown && this.shown.designs.length === map.designs.length
       && map.designs.every((d, i) => d === this.shown.designs[i] && signature[i] === this.shown.signature[i]);
     if (!same) {
@@ -149,6 +149,7 @@ class EditorPanel {
         el('strong', { textContent: t.label }),
         el('span', { className: 'tag-chip', textContent: `태그 ${design.tag}` }),
         design.code ? el('span', { className: 'code-chip', textContent: '코드' }) : '',
+        design.code && design.keep ? el('span', { className: 'code-chip', textContent: '죽어도 진행' }) : '',
         document.createTextNode(' ' + t.desc),
       );
     } else {
@@ -191,7 +192,7 @@ class EditorPanel {
     const cell = editor.selectedCell();
     const t = cell?.tile;
     const key = sel
-      ? [sel.x0, sel.y0, sel.x1, sel.y1, !!editor.clipboard, t?.kind, t?.design?.tag, t?.design?.code ? 1 : 0, t?.name, t?.length, cell?.zone].join('|')
+      ? [sel.x0, sel.y0, sel.x1, sel.y1, !!editor.clipboard, t?.kind, t?.design?.tag, t?.design?.code ? 1 : 0, t?.design?.keep ? 1 : 0, t?.name, t?.length, cell?.zone].join('|')
       : (editor.clipboard ? 'clip' : '');
     if (key === this.selShown) return;
     this.selShown = key;
@@ -226,7 +227,8 @@ class EditorPanel {
         el('div', { className: 'prop-line' },
           el('strong', { textContent: DesignTypes[d.type].label }),
           el('span', { className: 'tag-chip', textContent: `태그 ${d.tag}` }),
-          d.code ? el('span', { className: 'code-chip', textContent: '코드' }) : ''),
+          d.code ? el('span', { className: 'code-chip', textContent: '코드' }) : '',
+          d.code && d.keep ? el('span', { className: 'code-chip', textContent: '죽어도 진행' }) : ''),
         button(d.code ? '코드 편집' : '코드 넣기', () => this.onEditCode(d, { x: cell.x, y: cell.y })),
       );
     } else if (t?.kind === 'checkpoint') {

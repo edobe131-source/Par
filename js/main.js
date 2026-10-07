@@ -5,9 +5,24 @@
   const canvas = $('#game');
   const ctx = canvas.getContext('2d');
 
+  const make = window.el; // editor-panel.js의 el() (여기서 el은 화면 요소 모음)
+
   const el = {
     select: $('#screen-select'),
     worldList: $('#world-list'),
+    selectStars: $('#select-stars'),
+    btnSelectDev: $('#btn-select-dev'),
+    selectDevBadge: $('#select-dev-badge'),
+    btnExport: $('#btn-export'),
+    modalWorld: $('#modal-world'),
+    worldModalTitle: $('#world-modal-title'),
+    worldName: $('#world-name'),
+    worldReq: $('#world-req'),
+    worldError: $('#world-error'),
+    worldDelete: $('#world-delete'),
+    modalExport: $('#modal-export'),
+    exportText: $('#export-text'),
+    exportMsg: $('#export-msg'),
     hudPlay: $('#hud-play'),
     hintPlay: $('#hint-play'),
     playTitle: $('#play-title'),
@@ -51,32 +66,117 @@
 
   // ---- 월드 선택 ----
 
+  // 잠긴 월드: 모든 월드에서 모은 별의 합계가 그 월드의 '필요한 별'보다 적음. 개발자는 잠겨 있어도 들어갈 수 있다.
   function showWorldSelect() {
-    el.worldList.replaceChildren(
-      ...WORLDS.map((world) => {
-        const map = loadWorldMap(world);
-        const progress = ProgressStore.load(world.id);
-        const stars = map.positions('star');
-        const got = stars.filter((p) => progress.stars.has(cellKey(p.x, p.y))).length;
+    const dev = DevAuth.isUnlocked();
+    const worlds = WorldStore.list().map((world) => ({ world, ...worldStars(world) }));
+    const totalGot = worlds.reduce((sum, w) => sum + w.got, 0);
+    el.selectStars.textContent = `★ ${totalGot}`;
 
-        const card = document.createElement('button');
-        card.type = 'button';
-        card.className = 'world-card';
-        const num = document.createElement('span');
-        num.className = 'world-num';
-        num.textContent = world.id;
-        const name = document.createElement('span');
-        name.className = 'world-name';
-        name.textContent = world.name;
-        const starText = document.createElement('span');
-        starText.className = 'world-stars';
-        starText.textContent = `★ ${got} / ${stars.length}`;
-        card.append(num, name, starText);
-        card.addEventListener('click', () => enterWorld(world));
-        return card;
-      }),
-    );
+    const items = worlds.map(({ world, got, total }) => {
+      const locked = totalGot < world.stars;
+      const card = make('button', { type: 'button', className: 'world-card' + (locked ? ' locked' : ''), disabled: locked && !dev },
+        make('span', { className: 'world-num', textContent: world.id }),
+        make('span', { className: 'world-name', textContent: world.name }),
+        locked
+          ? make('span', { className: 'world-lock', textContent: `🔒 ★ ${world.stars} 필요` })
+          : make('span', { className: 'world-stars', textContent: `★ ${got} / ${total}` }));
+      if (locked && dev) card.title = '잠긴 월드 (개발자는 들어갈 수 있음)';
+      card.addEventListener('click', () => enterWorld(world));
+      const item = make('div', { className: 'world-item' }, card);
+      if (dev) {
+        const gear = make('button', { type: 'button', className: 'world-gear', title: '월드 설정', textContent: '⚙' });
+        gear.addEventListener('click', () => openWorldSettings(world));
+        item.append(gear);
+      }
+      return item;
+    });
+
+    if (dev) {
+      const add = make('button', { type: 'button', className: 'world-card add', title: '새 월드 만들기' },
+        make('span', { className: 'world-num', textContent: '+' }),
+        make('span', { className: 'world-name', textContent: '월드 추가' }));
+      add.addEventListener('click', () => openWorldSettings(null));
+      items.push(make('div', { className: 'world-item' }, add));
+    }
+
+    el.worldList.replaceChildren(...items);
+    el.btnSelectDev.classList.toggle('hidden', dev);
+    el.selectDevBadge.classList.toggle('hidden', !dev);
+    el.btnExport.classList.toggle('hidden', !dev);
     setScreen('select');
+  }
+
+  // world가 null이면 새 월드 추가
+  function openWorldSettings(world) {
+    const isNew = !world;
+    const id = isNew ? WorldStore.nextId() : world.id;
+    el.worldModalTitle.textContent = isNew ? `월드 추가 · ${id}번` : `월드 설정 · ${id}번`;
+    el.worldName.value = isNew ? `월드 ${id}` : world.name;
+    el.worldReq.value = isNew ? 0 : world.stars;
+    el.worldError.textContent = '';
+    // 코드(worlds.js)에 있는 월드는 지울 수 없다
+    el.worldDelete.classList.toggle('hidden', isNew || world.builtin);
+    el.worldDelete.classList.remove('confirm');
+    el.worldDelete.textContent = '월드 삭제';
+    worldEditing = { id, isNew };
+    Modal.open(el.modalWorld, { focus: el.worldName });
+    el.worldName.select();
+  }
+
+  let worldEditing = null;
+
+  $('#form-world').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = el.worldName.value.trim();
+    const stars = Number(el.worldReq.value);
+    if (!name) {
+      el.worldError.textContent = '이름을 입력하세요.';
+      return el.worldName.focus();
+    }
+    if (!Number.isInteger(stars) || stars < 0) {
+      el.worldError.textContent = '필요한 별은 0 이상의 정수여야 합니다.';
+      return el.worldReq.focus();
+    }
+    const { id, isNew } = worldEditing;
+    WorldStore.save({ id, name, stars });
+    if (isNew) MapStore.save(id, blankWorldMap()); // 바로 저장해 두어야 내보내기·별 계산이 같은 맵을 본다
+    Modal.close();
+    showWorldSelect();
+  });
+
+  // 두 번 눌러야 지워진다
+  el.worldDelete.addEventListener('click', () => {
+    if (!el.worldDelete.classList.contains('confirm')) {
+      el.worldDelete.classList.add('confirm');
+      el.worldDelete.textContent = '정말 삭제? (맵도 지워짐)';
+      return;
+    }
+    WorldStore.remove(worldEditing.id);
+    Modal.close();
+    showWorldSelect();
+  });
+
+  el.btnExport.addEventListener('click', () => {
+    el.exportText.value = exportWorldsCode();
+    el.exportMsg.textContent = '';
+    el.exportMsg.classList.remove('ok');
+    Modal.open(el.modalExport, { focus: el.exportText });
+    el.exportText.select();
+  });
+
+  $('#export-copy').addEventListener('click', () => copyText(el.exportText, el.exportMsg));
+
+  // 텍스트 칸 내용을 클립보드로 복사하고 msgEl에 알린다
+  async function copyText(textarea, msgEl) {
+    textarea.select();
+    try {
+      await navigator.clipboard.writeText(textarea.value);
+    } catch {
+      document.execCommand('copy'); // file:// 등 clipboard API를 못 쓰는 환경
+    }
+    msgEl.textContent = '복사했습니다.';
+    msgEl.classList.add('ok');
   }
 
   function enterWorld(world) {
@@ -141,18 +241,25 @@
 
   // ---- 개발자 인증 ----
 
-  el.btnDev.addEventListener('click', () => {
-    if (DevAuth.isUnlocked()) return openEditor();
+  // 인증되면 then() (플레이 중이면 에디터 열기, 월드 선택이면 개발자 버튼들 보이기)
+  let afterAuth = null;
+
+  function requireDev(then) {
+    if (DevAuth.isUnlocked()) return then();
+    afterAuth = then;
     el.authCode.value = '';
     el.authError.textContent = '';
     Modal.open(el.modalAuth, { focus: el.authCode });
-  });
+  }
+
+  el.btnDev.addEventListener('click', () => requireDev(openEditor));
+  el.btnSelectDev.addEventListener('click', () => requireDev(showWorldSelect));
 
   $('#form-auth').addEventListener('submit', (e) => {
     e.preventDefault();
     if (DevAuth.verify(el.authCode.value)) {
       Modal.close();
-      openEditor();
+      afterAuth?.();
     } else {
       el.authError.textContent = '인증 코드가 올바르지 않습니다.';
       el.authCode.select();
@@ -186,7 +293,7 @@
       codeDialog.open({
         design,
         isNew: !design.code,
-        onSave: (code) => state.editor.saveCode(design, code, cell),
+        onSave: (code, keep) => state.editor.saveCode(design, code, cell, keep),
       }),
   });
 
@@ -241,20 +348,11 @@
     el.mapStrText.select();
   });
 
-  $('#mapstr-copy').addEventListener('click', async () => {
-    el.mapStrText.select();
-    try {
-      await navigator.clipboard.writeText(el.mapStrText.value);
-    } catch {
-      document.execCommand('copy'); // file:// 등 clipboard API를 못 쓰는 환경
-    }
-    el.mapStrMsg.textContent = '복사했습니다.';
-    el.mapStrMsg.classList.add('ok');
-  });
+  $('#mapstr-copy').addEventListener('click', () => copyText(el.mapStrText, el.mapStrMsg));
 
   // 기본 맵 문자열을 칸에 채우기만 한다 (적용을 눌러야 바뀜)
   $('#mapstr-default').addEventListener('click', () => {
-    el.mapStrText.value = state.world.defaultMap;
+    el.mapStrText.value = state.world.defaultMap || MapCodec.encode(blankWorldMap());
     el.mapStrMsg.textContent = '기본 맵을 불러왔습니다. 적용을 누르면 지금 맵이 바뀝니다.';
     el.mapStrMsg.classList.add('ok');
   });
@@ -283,7 +381,7 @@
 
   // 버튼이 포커스를 잡으면 Space(점프)가 버튼을 다시 누르므로 포커스를 주지 않는다.
   document.addEventListener('mousedown', (e) => {
-    if (e.target.closest('.hud button, .panel button, .world-card')) e.preventDefault();
+    if (e.target.closest('.hud button, .panel button, .world-item button, .select-bar button')) e.preventDefault();
   });
 
   // 탭을 닫거나 새로고침할 때 저장 안 된 편집 내용 보존

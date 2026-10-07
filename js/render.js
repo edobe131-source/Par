@@ -33,19 +33,20 @@ const Render = {
     switch (tile.kind) {
       case 'design': {
         const type = tile.design.type;
-        const art = DesignArt.tile(tile.design);
+        const art = DesignArt.tile(tile.design, !info); // 에디터에선 투명 픽셀(판정만 있음)도 옅게
         if (type === 'machine') this.machine(ctx, art, sx, sy, tile.dir);
-        else if (type === 'cloud') {
-          const press = info?.cloudPress?.key === key ? info.cloudPress.amount : 0;
-          ctx.drawImage(art, sx, sy + Math.round(press * 6));
-        } else if (DesignTypes[type].rotatable) {
+        else {
+          const press = type === 'cloud' && info?.cloudPress?.key === key ? Math.round(info.cloudPress.amount * 6) : 0;
           const offset = type === 'spike1' ? Math.round(((tile.pos - 1) * T) / 3) : 0;
-          ctx.save();
-          ctx.translate(sx + T / 2, sy + T / 2);
-          ctx.rotate((tile.rot * Math.PI) / 2);
-          ctx.drawImage(art, -T / 2 + offset, -T / 2);
-          ctx.restore();
-        } else ctx.drawImage(art, sx, sy);
+          if (!tile.rot && !offset) ctx.drawImage(art, sx, sy + press);
+          else {
+            ctx.save();
+            ctx.translate(sx + T / 2, sy + T / 2 + press);
+            ctx.rotate((tile.rot * Math.PI) / 2);
+            ctx.drawImage(art, -T / 2 + offset, -T / 2);
+            ctx.restore();
+          }
+        }
         if (!info && tile.design.code) this.codeBadge(ctx, sx, sy); // 에디터: 코드가 든 블록 표시
         break;
       }

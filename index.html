@@ -13,8 +13,13 @@
     <!-- 월드 선택 -->
     <section id="screen-select" class="screen">
       <h1 class="logo">PAR</h1>
-      <p class="subtitle">월드를 선택하세요</p>
+      <p class="subtitle">월드를 선택하세요 <span id="select-stars" class="select-stars"></span></p>
       <div id="world-list" class="world-list"></div>
+      <div class="select-bar">
+        <button id="btn-select-dev" type="button">개발자</button>
+        <span id="select-dev-badge" class="badge hidden">개발자 모드 · 월드를 추가하고 ⚙로 설정</span>
+        <button id="btn-export" type="button" class="hidden" title="이 브라우저의 월드들을 모두에게 보이게 할 코드">worlds.js로 내보내기</button>
+      </div>
     </section>
 
     <!-- 플레이 HUD -->
@@ -117,6 +122,40 @@
       </form>
     </div>
 
+    <!-- 월드 추가 / 설정 (개발자) -->
+    <div id="modal-world" class="modal hidden">
+      <form id="form-world" class="modal-box" novalidate>
+        <h2 id="world-modal-title">월드 설정</h2>
+        <label class="field">이름
+          <input id="world-name" type="text" maxlength="20" autocomplete="off">
+        </label>
+        <label class="field">열리는 데 필요한 별
+          <input id="world-req" type="number" min="0" max="9999" step="1">
+        </label>
+        <p class="desc">모든 월드에서 모은 별의 합계가 이 수 이상이 되면 열립니다. 0이면 처음부터 열려 있습니다.</p>
+        <p id="world-error" class="error"></p>
+        <div class="row">
+          <button type="button" id="world-delete" class="left danger">월드 삭제</button>
+          <button type="button" data-close>취소</button>
+          <button type="submit" class="primary">저장</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- worlds.js로 내보내기 (개발자) -->
+    <div id="modal-export" class="modal hidden">
+      <div class="modal-box wide">
+        <h2>worlds.js로 내보내기</h2>
+        <p class="desc">추가한 월드·이름·필요한 별·맵은 이 브라우저에만 저장됩니다. 아래 코드로 <code>js/worlds.js</code>의 <code>const WORLDS = [...]</code> 부분을 바꾸면 모든 사람에게 그대로 보입니다.</p>
+        <textarea id="export-text" spellcheck="false" readonly></textarea>
+        <p id="export-msg" class="error"></p>
+        <div class="row">
+          <button type="button" data-close>닫기</button>
+          <button type="button" id="export-copy" class="primary">복사</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 맵 문자열 보기 / 붙여넣기 -->
     <div id="modal-mapstr" class="modal hidden">
       <div class="modal-box wide">
@@ -144,14 +183,15 @@
             <canvas id="design-preview" width="176" height="96"></canvas>
             <div id="design-picker"></div>
             <div class="color-row">
-              <button id="design-transparent" type="button" class="small">투명</button>
+              <button id="design-transparent" type="button" class="small" title="안 보이지만 판정이 있음">투명</button>
+              <button id="design-empty" type="button" class="small" title="판정도 없음">비우기</button>
               <button id="design-fill" type="button" class="small">전체 채우기</button>
             </div>
             <div class="used-label">쓴 색</div>
             <div id="design-used" class="swatches"></div>
           </div>
         </div>
-        <p class="desc">좌클릭 칠하기 · 우클릭 투명 · Alt+클릭 색 집기 · 빗금 칸은 모양 밖이라 투명으로 고정</p>
+        <p class="desc">좌클릭 칠하기 · 우클릭 비우기 · Alt+클릭 색 집기 · 색과 투명(하늘색 빗금)은 판정 있음, 비운 칸(체크무늬)은 판정 없음 <span id="design-hover" class="hover-px"></span></p>
         <div class="row">
           <button type="button" data-close>취소</button>
           <button type="button" id="design-save" class="primary">저장</button>
@@ -172,6 +212,9 @@
           <div id="code-help" class="code-help"></div>
         </div>
         <p id="code-status" class="code-status"></p>
+        <label class="check-row" title="꺼 두면 캐릭터가 죽을 때 이 블록은 처음 상태(perm()으로 저장했으면 그 상태)로 돌아가 코드를 처음부터 다시 실행합니다.">
+          <input id="code-keep" type="checkbox"> 죽어도 진행 <span class="desc-inline">캐릭터가 죽어도 이 블록은 되돌리지 않고 코드를 계속 실행</span>
+        </label>
         <div class="row">
           <button type="button" data-close>취소</button>
           <button type="button" id="code-save" class="primary">저장 <kbd>Ctrl+S</kbd></button>

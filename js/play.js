@@ -6,9 +6,13 @@
 //   cloud:  구름에 파묻히는 중 → 바닥까지 내려가면 저절로 튀어오름
 //   rope:   밧줄에 매달려 흔드는 중 (점프 키를 누르고 있는 동안)
 //
+// 판정: 블록은 그린 픽셀 모양 그대로 부딪힌다 (designs.js의 Hitbox). 돌린 블록은 돌린 모양대로.
+//   낮은 턱(STEP_UP 이하)은 걸어서 올라서고 내려가는 비탈에는 붙어 걸어서, 기울어진 면은 비탈처럼 다닌다.
+//
 // 코드가 들어 있는 블록은 칸에서 빼내 "움직이는 블록"(entity)으로 다룬다.
 //   좌표는 칸 단위 실수, 회전(도)·투명도·숨김·픽셀 색을 블록마다 따로 가지며 자기 코드를 돌린다.
-//   단단한 블록 판정은 회전과 상관없이 칸 크기 사각형, 가시 판정은 회전한 삼각형.
+//   캐릭터가 죽으면 처음 상태(perm()으로 저장했으면 그 상태)로 돌아가 코드를 처음부터 다시 실행한다.
+//   '죽어도 진행'을 켠 블록은 그대로 계속 실행한다.
 
 const PHYS = {
   gravity: 2200,
@@ -42,6 +46,8 @@ const PHYS = {
 
 const JUMP_KEYS = ['Space', 'ArrowUp', 'KeyW'];
 const EPS = 0.001;
+const STEP_UP = 8; // 이 높이(px, 픽셀 2칸) 이하의 턱은 걸어서 올라섬
+const STEP_DOWN = 12; // 내려가는 비탈에서 이만큼까지는 땅에 붙어 걸음 (한 프레임에 계단 두 칸을 지나도 붙도록)
 const FALL_DEATH_DEPTH = 10; // 맵의 가장 아래 칸보다 이만큼(칸) 더 떨어지면 사망
 
 // noKey/yesKey에 쓰는 키 이름
@@ -69,41 +75,12 @@ function boxesOverlap(a, b) {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
-// 분리축 검사: 삼각형(꼭짓점 3개)과 축 정렬 사각형이 겹치는지
-function triangleHitsBox(tri, box) {
-  const corners = [
-    [box.x, box.y], [box.x + box.w, box.y],
-    [box.x, box.y + box.h], [box.x + box.w, box.y + box.h],
-  ];
-  const axes = [[1, 0], [0, 1]];
-  for (let i = 0; i < 3; i++) {
-    const [ax, ay] = tri[i];
-    const [bx, by] = tri[(i + 1) % 3];
-    axes.push([by - ay, ax - bx]);
-  }
-  for (const [nx, ny] of axes) {
-    let tMin = Infinity, tMax = -Infinity, bMin = Infinity, bMax = -Infinity;
-    for (const [x, y] of tri) {
-      const d = x * nx + y * ny;
-      tMin = Math.min(tMin, d);
-      tMax = Math.max(tMax, d);
-    }
-    for (const [x, y] of corners) {
-      const d = x * nx + y * ny;
-      bMin = Math.min(bMin, d);
-      bMax = Math.max(bMax, d);
-    }
-    if (tMax <= bMin || bMax <= tMin) return false;
-  }
-  return true;
-}
-
 // 밧줄 고정점과 길이(px)
 const ropePivot = (r) => ({ x: r.x * TILE_SIZE + TILE_SIZE / 2, y: r.y * TILE_SIZE + 6 });
 const ropeLength = (r) => r.length * TILE_SIZE - 8;
 
 const isSolidType = (type) => !!type && !!DesignTypes[type].solid;
-const entityBox = (e) => ({ x: e.x * TILE_SIZE, y: e.y * TILE_SIZE, w: TILE_SIZE, h: TILE_SIZE });
+const isHazardType = (type) => !!type && !!DesignTypes[type].hazard;
 
 class PlaySession {
   // onProgress: 진행 상황이 바뀔 때 호출 (저장용). 테스트 플레이에서는 생략.
@@ -117,12 +94,15 @@ class PlaySession {
     };
     this.cam = { x: 0, y: 0 };
     this.flash = 0; // 사망 시 화면 붉게
-    this.cloud = null; // 파묻히는 중인 구름 { key | entity, startY, endY, t }
+    this.cloud = null; // 파묻히는 중인 구름 { key | entity, top, bottom, t }
     this.cloudPress = null; // 구름 눌림 연출 { key | entity, amount }
     this.rope = null; // 매달린 밧줄 { r, d }
     this.ropeCooldown = 0;
     this.blockedKeys = new Set(); // noKey로 막힌 키
     this.scriptErrors = []; // { tag, x, y, line, message }
+    this.shared = {}; // 월드 공통 변수 ('_'로 끝나는 이름)
+    this.savedShared = {}; // perm()으로 저장한 공통 변수 (죽으면 이 값으로)
+    this.resetPending = false;
 
     const bottom = (map.bounds().maxY + 1) * TILE_SIZE;
     this.deathY = bottom + FALL_DEATH_DEPTH * TILE_SIZE;
@@ -183,7 +163,7 @@ class PlaySession {
     return p.mode === 'normal' && !p.onGround && p.vy > 0;
   }
 
-  // 등록된 체크포인트로 이동. 떨어지는 중이면 거부.
+  // 등록된 체크포인트로 이동. 떨어지는 중이면 거부. (죽은 게 아니라 코드 블록은 그대로)
   teleport(key) {
     const cp = this.checkpointList.find((c) => c.key === key);
     if (!cp || !this.isRegistered(cp) || this.isFalling()) return false;
@@ -197,8 +177,15 @@ class PlaySession {
     this.placeAt(this.currentCheckpoint());
   }
 
+  // 죽음: 체크포인트로 돌아가고, 코드 블록은 이번 프레임 코드가 다 돈 뒤 처음 상태로 되돌린다.
   die() {
     this.flash = 0.35;
+    this.restart();
+  }
+
+  // R 키: 스스로 죽는 것과 같음 (화면만 안 붉어짐)
+  restart() {
+    this.resetPending = true;
     this.respawn();
   }
 
@@ -255,7 +242,7 @@ class PlaySession {
       }
     }
     this.swingFreeRopes(dt);
-    if (this.keyPressed('KeyR')) this.respawn();
+    if (this.keyPressed('KeyR')) this.restart();
 
     const env = this.sense();
     // 사다리에 겹쳐 있으면 ↑/W는 오르기에 쓰고 점프는 Space로만
@@ -280,7 +267,9 @@ class PlaySession {
 
     if (!this.touchTiles() && p.y > this.deathY) this.die();
 
+    if (this.resetPending) this.resetEntities(); // 이번 스텝에 죽었으면 코드 블록을 먼저 되돌리고
     this.runScripts(dt);
+    if (this.resetPending) this.resetEntities(); // 코드 안에서 kill()했으면 코드가 다 돈 뒤에 되돌림
 
     const target = this.cameraTarget();
     const k = 1 - Math.exp(-dt * 10);
@@ -288,19 +277,76 @@ class PlaySession {
     this.cam.y += (target.y - this.cam.y) * k;
   }
 
-  // ---- 블록 찾기 (칸에 고정된 블록 + 움직이는 블록) ----
+  // ---- 판정 조각 (칸 블록 + 움직이는 블록) ----
 
-  // 몸과 겹치는 보이는 움직이는 블록들
-  entitiesTouching(box, test = () => true) {
-    return this.entities.filter((e) => e.visible && test(e) && boxesOverlap(box, entityBox(e)));
+  body(x = this.player.x, y = this.player.y) {
+    return { x, y, w: this.player.w, h: this.player.h };
+  }
+
+  // 움직이는 블록의 판정 사각형 (블록 왼쪽 위 기준 px). 모양·각도가 바뀔 때만 다시 계산.
+  entityRects(e) {
+    const t = e.tile;
+    const key = `${t.design.version}|${e.pixelsVersion}|${t.pos}|${t.rot}|${e.angle}|${t.design.tag}`;
+    if (e.rectKey !== key) {
+      e.rectKey = key;
+      e.rects = Hitbox.rects(e.pixels || t.design.pixels, t.design.type, t.pos, t.rot * 90 + e.angle);
+    }
+    return e.rects;
+  }
+
+  // 상자 근처 블록들의 판정 조각 (월드 px). 각 조각: { x, y, w, h, type, tile, entity, tx, ty }
+  piecesNear(box) {
+    const T = TILE_SIZE;
+    const out = [];
+    // 단일 가시 위치·회전 때문에 칸 밖으로 조금 나갈 수 있어 한 칸씩 더 본다
+    const x0 = Math.floor(box.x / T) - 1, x1 = Math.floor((box.x + box.w) / T) + 1;
+    const y0 = Math.floor(box.y / T) - 1, y1 = Math.floor((box.y + box.h) / T) + 1;
+    for (let ty = y0; ty <= y1; ty++) {
+      for (let tx = x0; tx <= x1; tx++) {
+        const tile = this.map.get(tx, ty);
+        if (!tile || tile.kind !== 'design') continue;
+        for (const r of Hitbox.forTile(tile)) {
+          out.push({ x: tx * T + r.x, y: ty * T + r.y, w: r.w, h: r.h, type: tile.design.type, tile, entity: null, tx, ty });
+        }
+      }
+    }
+    for (const e of this.entities) {
+      if (!e.visible) continue;
+      const ex = e.x * T;
+      const ey = e.y * T;
+      if (ex > box.x + box.w + T || ex + T * 2 < box.x || ey > box.y + box.h + T || ey + T * 2 < box.y) continue;
+      for (const r of this.entityRects(e)) out.push({ x: ex + r.x, y: ey + r.y, w: r.w, h: r.h, type: e.type, tile: e.tile, entity: e });
+    }
+    return out;
+  }
+
+  // 몸과 겹치는 단단한 조각. ignore: 무시할 움직이는 블록 (그 블록에 실려 갈 때)
+  solidHits(box, ignore = null) {
+    return this.piecesNear(box).filter((r) => isSolidType(r.type) && !(ignore && r.entity === ignore) && boxesOverlap(box, r));
+  }
+
+  // (x, y)에 플레이어 몸을 두면 단단한 블록과 겹치는지
+  boxHitsSolid(x, y, ignore = null) {
+    return this.solidHits(this.body(x, y), ignore).length > 0;
   }
 
   // 점 (px, py)에 사다리가 있는지
   ladderAt(px, py) {
-    const T = TILE_SIZE;
-    if (this.map.designType(Math.floor(px / T), Math.floor(py / T)) === 'ladder') return true;
-    return this.entities.some((e) => e.visible && e.type === 'ladder'
-      && px >= e.x * T && px < (e.x + 1) * T && py >= e.y * T && py < (e.y + 1) * T);
+    return this.piecesNear({ x: px, y: py, w: 0, h: 0 })
+      .some((r) => r.type === 'ladder' && px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h);
+  }
+
+  // 발밑 maxDist 안에 단단한 윗면이 있으면 그 거리
+  groundBelow(maxDist, ignore = null) {
+    const p = this.player;
+    const feet = p.y + p.h;
+    const probe = { x: p.x, y: feet, w: p.w, h: maxDist + 0.01 }; // maxDist 딱 그 거리도 포함
+    let best = null;
+    for (const r of this.piecesNear(probe)) {
+      if (!isSolidType(r.type) || (ignore && r.entity === ignore) || r.y < feet - 0.01 || !boxesOverlap(probe, r)) continue;
+      best = best === null ? r.y : Math.min(best, r.y);
+    }
+    return best === null ? null : best - feet;
   }
 
   // 플레이어 주변 상황. 움직이는 블록의 '옆면에 붙어 있음'(stick)도 여기서 갱신.
@@ -308,56 +354,42 @@ class PlaySession {
     const p = this.player;
     const T = TILE_SIZE;
     const map = this.map;
-    const env = { double: false, infinite: false, airjump: false, darkcloud: false, ladder: false, ladderX: null };
-    const body = { x: p.x, y: p.y, w: p.w, h: p.h };
+    const env = { double: false, infinite: false, airjump: false, darkcloud: false, ladder: false, ladderX: null, wall: false };
+    const body = this.body();
     const x0 = Math.floor(p.x / T), x1 = Math.floor((p.x + p.w - EPS) / T);
     const y0 = Math.floor(p.y / T), y1 = Math.floor((p.y + p.h - EPS) / T);
-    const orbBox = (x, y) => ({ x: x * T + 4, y: y * T + 4, w: T - 8, h: T - 8 });
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
         const zone = map.zone(tx, ty);
         if (zone === 'double') env.double = true;
         if (zone === 'infinite') env.infinite = true;
-        const type = map.designType(tx, ty);
-        if (type === 'darkcloud') env.darkcloud = true;
-        if (type === 'airjump' && boxesOverlap(body, orbBox(tx, ty))) env.airjump = true;
       }
-    }
-    for (const e of this.entitiesTouching(body)) {
-      if (e.type === 'darkcloud') env.darkcloud = true;
-      if (e.type === 'airjump' && boxesOverlap(body, orbBox(e.x, e.y))) env.airjump = true;
     }
     // 물은 몸 중심 기준, 머리가 물 밖이면 수면
     const cxPx = p.x + p.w / 2;
     const cx = Math.floor(cxPx / T);
     env.water = map.zone(cx, Math.floor((p.y + p.h / 2) / T)) === 'water';
     env.headOut = map.zone(cx, Math.floor((p.y + 2) / T)) !== 'water';
-    // 사다리는 몸 중심 세로줄 기준
-    for (let ty = y0; ty <= y1; ty++) {
-      if (map.designType(cx, ty) === 'ladder') {
-        env.ladder = true;
-        env.ladderX = cx;
+
+    for (const e of this.entities) e.flags.stick = false;
+    for (const r of this.piecesNear(body)) {
+      const vertical = r.y < p.y + p.h && r.y + r.h > p.y;
+      if (boxesOverlap(body, r)) {
+        if (r.type === 'darkcloud') env.darkcloud = true;
+        if (r.type === 'airjump') env.airjump = true;
       }
-    }
-    for (const e of this.entities) {
-      if (e.visible && e.type === 'ladder' && cxPx >= e.x * T && cxPx < (e.x + 1) * T && p.y < (e.y + 1) * T && p.y + p.h > e.y * T) {
+      // 사다리는 몸 중심 세로줄 기준
+      if (r.type === 'ladder' && vertical && cxPx >= r.x && cxPx < r.x + r.w) {
         env.ladder = true;
-        env.ladderX = e.x;
+        env.ladderX = r.x + r.w / 2;
+      }
+      // 몸 옆면이 단단한 조각에 딱 붙어 있음 (벽 점프 · stick)
+      if (isSolidType(r.type) && vertical && (Math.abs(p.x + p.w - r.x) < 0.5 || Math.abs(p.x - (r.x + r.w)) < 0.5)) {
+        if (r.type === 'wall') env.wall = true;
+        if (r.entity) r.entity.flags.stick = true;
       }
     }
     env.ladderBelow = this.ladderAt(cxPx, p.y + p.h + 1);
-    // 벽: 몸 옆면이 벽 블록에 딱 붙어 있음
-    const isWall = (tx) => {
-      for (let ty = y0; ty <= y1; ty++) if (map.designType(tx, ty) === 'wall') return true;
-      return false;
-    };
-    env.wall = isWall(Math.floor((p.x - 0.5) / T)) || isWall(Math.floor((p.x + p.w + 0.5) / T));
-    for (const e of this.entities) {
-      const b = entityBox(e);
-      e.flags.stick = e.visible && p.y < b.y + b.h && p.y + p.h > b.y
-        && (Math.abs(p.x + p.w - b.x) < 0.5 || Math.abs(p.x - (b.x + b.w)) < 0.5);
-      if (e.flags.stick && e.type === 'wall') env.wall = true;
-    }
     return env;
   }
 
@@ -392,9 +424,8 @@ class PlaySession {
           this.moveX(p.vx * dt);
         } else if (env.ladderX !== null) {
           // 좌우 입력이 없으면 사다리 가운데로 붙는다 (옆 블록에 머리가 걸리지 않게)
-          const target = env.ladderX * TILE_SIZE + (TILE_SIZE - p.w) / 2;
           p.vx = 0;
-          this.moveX(approach(p.x, target, 200 * dt) - p.x);
+          this.moveX(approach(p.x, env.ladderX - p.w / 2, 200 * dt) - p.x);
         }
         p.vy = ((input.down ? 1 : 0) - (input.up ? 1 : 0)) * PHYS.climbSpeed;
         p.airJumps = 0;
@@ -436,9 +467,15 @@ class PlaySession {
       if (p.vy > PHYS.waterMaxFall) p.vy = approach(p.vy, PHYS.waterMaxFall, 4000 * dt);
     } else p.vy = Math.min(p.vy + PHYS.gravity * dt, PHYS.maxFall);
 
+    // 땅 위에서 걸을 땐 낮은 턱을 올라서고 내려가는 비탈에 붙는다
+    const grounded = p.onGround && p.vy >= 0;
     const conveyor = p.onGround && p.groundType === 'machine' ? (p.groundDir ? 1 : -1) * PHYS.conveyorSpeed : 0;
-    this.moveX(p.vx * dt);
-    if (conveyor) this.moveX(conveyor * dt);
+    this.moveX(p.vx * dt, { step: grounded });
+    if (conveyor) this.moveX(conveyor * dt, { step: grounded });
+    if (grounded) {
+      const d = this.groundBelow(STEP_DOWN);
+      if (d !== null && d > 0.01) p.y += d;
+    }
     this.moveY(p.vy * dt);
   }
 
@@ -448,12 +485,19 @@ class PlaySession {
     c.t += dt;
     p.vx = approach(p.vx, input.dir * PHYS.moveSpeed, PHYS.airAccel * dt);
     this.moveX(p.vx * dt);
-    // 움직이는 구름이면 지금 위치 기준으로 바닥을 다시 잡음
-    const endY = c.entity ? (c.entity.y + 1) * TILE_SIZE - p.h : c.endY;
-    const startY = c.entity ? c.entity.y * TILE_SIZE - p.h : c.startY;
+    // 움직이는 구름이면 지금 위치 기준으로 범위를 다시 잡음
+    if (c.entity) {
+      const r = this.entityRects(c.entity)[0];
+      if (r) {
+        c.top = c.entity.y * TILE_SIZE + r.y;
+        c.bottom = c.top + r.h;
+      }
+    }
+    const startY = c.top - p.h;
+    const endY = c.bottom - p.h; // 끝에선 캐릭터가 구름 안에 완전히 겹침
     const k = Math.min(1, c.t / PHYS.cloudSinkTime);
     const ease = 1 - (1 - k) * (1 - k);
-    p.y = startY + (endY - startY) * ease; // 끝에선 캐릭터가 구름 칸 안에 완전히 겹침
+    p.y = startY + (endY - startY) * ease;
     this.cloudPress = { key: c.key, entity: c.entity, amount: ease };
     if (k >= 1 || (c.entity && !c.entity.visible)) {
       this.cloud = null;
@@ -563,57 +607,24 @@ class PlaySession {
     }
   }
 
-  // (x, y)에 플레이어 몸을 두면 단단한 블록과 겹치는지. ignore: 무시할 움직이는 블록
-  boxHitsSolid(x, y, ignore = null) {
-    const p = this.player;
-    const T = TILE_SIZE;
-    for (let ty = Math.floor(y / T); ty <= Math.floor((y + p.h - EPS) / T); ty++) {
-      for (let tx = Math.floor(x / T); tx <= Math.floor((x + p.w - EPS) / T); tx++) {
-        if (this.map.isSolid(tx, ty)) return true;
-      }
-    }
-    return this.entitiesTouching({ x, y, w: p.w, h: p.h }, (e) => e !== ignore && isSolidType(e.type)).length > 0;
-  }
-
-  // 가시: 칸 블록은 칸 회전(rot), 움직이는 블록은 거기에 코드로 돌린 각도까지 더해 판정
-  hazardTriangles(type, tile, x, y, angle = 0) {
-    let tris = Shapes.triangles(type, tile.pos, tile.rot);
-    if (angle) {
-      const c = Math.cos(angle * DEG);
-      const s = Math.sin(angle * DEG);
-      tris = tris.map((tri) => tri.map(([u, v]) => [0.5 + (u - 0.5) * c - (v - 0.5) * s, 0.5 + (u - 0.5) * s + (v - 0.5) * c]));
-    }
-    return tris.map((tri) => tri.map(([u, v]) => [(x + u) * TILE_SIZE, (y + v) * TILE_SIZE]));
-  }
-
   // 겹친 칸 처리: 가시 → 사망, 별 → 획득, 체크포인트 → 등록. 죽었으면 true.
   touchTiles() {
     const p = this.player;
     const T = TILE_SIZE;
-    const body = { x: p.x, y: p.y, w: p.w, h: p.h };
+    const body = this.body();
     const hurt = { x: p.x + 2, y: p.y + 2, w: p.w - 4, h: p.h - 3 }; // 가시 판정은 조금 너그럽게
-    const x0 = Math.floor(p.x / T), x1 = Math.floor((p.x + p.w - EPS) / T);
-    const y0 = Math.floor(p.y / T), y1 = Math.floor((p.y + p.h - EPS) / T);
-
-    for (const e of this.entitiesTouching(body, (e) => DesignTypes[e.type].hazard)) {
-      if (this.hazardTriangles(e.type, e.tile, e.x, e.y, e.angle).some((tri) => triangleHitsBox(tri, hurt))) {
-        this.die();
-        return true;
-      }
+    if (this.piecesNear(hurt).some((r) => isHazardType(r.type) && boxesOverlap(hurt, r))) {
+      this.die();
+      return true;
     }
 
+    const x0 = Math.floor(p.x / T), x1 = Math.floor((p.x + p.w - EPS) / T);
+    const y0 = Math.floor(p.y / T), y1 = Math.floor((p.y + p.h - EPS) / T);
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
         const tile = this.map.get(tx, ty);
         if (!tile) continue;
-
-        if (tile.kind === 'design') {
-          if (!DesignTypes[tile.design.type].hazard) continue;
-          if (this.hazardTriangles(tile.design.type, tile, tx, ty).some((tri) => triangleHitsBox(tri, hurt))) {
-            this.die();
-            return true;
-          }
-        } else if (tile.kind === 'star') {
+        if (tile.kind === 'star') {
           const key = cellKey(tx, ty);
           const inner = { x: tx * T + 6, y: ty * T + 6, w: T - 12, h: T - 12 };
           if (!this.progress.stars.has(key) && boxesOverlap(body, inner)) {
@@ -634,123 +645,87 @@ class PlaySession {
     return false;
   }
 
-  // 한 스텝 이동량이 칸 크기보다 작으므로 칸 블록은 진행 방향의 앞쪽 가장자리만 검사하면 된다.
-  // ignore: 무시할 움직이는 블록 (그 블록에 실려 갈 때)
-  moveX(dx, ignore = null) {
+  // 가로 이동. 이번 이동으로 새로 부딪힌 조각만 막는다 (이미 겹쳐 있던 조각은 빠져나갈 수 있게).
+  // step: 땅 위에서 걷는 중이면 낮은 턱은 올라선다.
+  moveX(dx, { ignore = null, step = false } = {}) {
     const p = this.player;
-    p.x += dx;
     if (!dx) return;
-    const top = Math.floor(p.y / TILE_SIZE);
-    const bottom = Math.floor((p.y + p.h - EPS) / TILE_SIZE);
-    if (dx > 0) {
-      const tx = Math.floor((p.x + p.w - EPS) / TILE_SIZE);
-      for (let ty = top; ty <= bottom; ty++) {
-        if (this.map.isSolid(tx, ty)) { p.x = tx * TILE_SIZE - p.w; p.vx = 0; break; }
+    p.x += dx;
+    for (let i = 0; i < 4; i++) {
+      const hits = this.solidHits(this.body(), ignore)
+        .filter((h) => (dx > 0 ? p.x + p.w - h.x : h.x + h.w - p.x) <= Math.abs(dx) + 0.01);
+      if (!hits.length) return;
+      if (step && i === 0) {
+        const lift = p.y + p.h - Math.min(...hits.map((h) => h.y));
+        if (lift > 0 && lift <= STEP_UP && !this.boxHitsSolid(p.x, p.y - lift, ignore)) {
+          p.y -= lift;
+          return;
+        }
       }
-    } else {
-      const tx = Math.floor(p.x / TILE_SIZE);
-      for (let ty = top; ty <= bottom; ty++) {
-        if (this.map.isSolid(tx, ty)) { p.x = (tx + 1) * TILE_SIZE; p.vx = 0; break; }
-      }
-    }
-    for (const e of this.entities) {
-      if (e === ignore || !e.visible || !isSolidType(e.type)) continue;
-      const b = entityBox(e);
-      if (!boxesOverlap({ x: p.x, y: p.y, w: p.w, h: p.h }, b)) continue;
-      p.x = dx > 0 ? b.x - p.w : b.x + b.w;
+      p.x = dx > 0 ? Math.min(...hits.map((h) => h.x)) - p.w : Math.max(...hits.map((h) => h.x + h.w));
       p.vx = 0;
     }
   }
 
-  // climbing: 사다리 타는 중이면 사다리 꼭대기를 발판으로 쓰지 않음
+  // 세로 이동. climbing: 사다리 타는 중이면 사다리 꼭대기·구름을 발판으로 쓰지 않음
   moveY(dy, { climbing = false, ignore = null } = {}) {
     const p = this.player;
-    const T = TILE_SIZE;
     const prevBottom = p.y + p.h;
+    const prevTop = p.y;
     p.y += dy;
     p.onGround = false;
     p.groundEntity = null;
-    const left = Math.floor(p.x / T);
-    const right = Math.floor((p.x + p.w - EPS) / T);
-    const solidEntities = () => this.entities.filter((e) => e !== ignore && e.visible && isSolidType(e.type));
-    const overlapsNow = (b) => boxesOverlap({ x: p.x, y: p.y, w: p.w, h: p.h }, b);
 
     if (dy > 0) {
-      let landed = false;
-      const ty = Math.floor((p.y + p.h - EPS) / T);
-      for (let tx = left; tx <= right; tx++) {
-        if (this.map.isSolid(tx, ty)) {
-          this.land(ty * T, this.map.get(tx, ty), null, tx, ty);
-          landed = true;
-          break;
-        }
+      const hits = this.solidHits(this.body(), ignore).filter((h) => prevBottom <= h.y + 0.01);
+      if (hits.length) {
+        const top = Math.min(...hits.map((h) => h.y));
+        return this.land(top, this.pieceUnder(hits.filter((h) => h.y <= top + 0.01)));
       }
-      for (const e of solidEntities()) {
-        const b = entityBox(e);
-        if (!overlapsNow(b)) continue;
-        this.land(b.y, e.tile, e);
-        landed = true;
-      }
-      if (landed || climbing) return;
-
+      if (climbing) return;
       // 구름 윗면 → 파묻히기 시작 · 사다리 꼭대기 → 발판 (위에서 넘어올 때만)
-      const top = ty * T;
-      if (prevBottom <= top + EPS) {
-        for (let tx = left; tx <= right; tx++) {
-          const type = this.map.designType(tx, ty);
-          if (type === 'cloud') return this.enterCloud({ key: cellKey(tx, ty), top, bottom: top + T });
-          if (type === 'ladder' && this.map.designType(tx, ty - 1) !== 'ladder') return this.land(top, this.map.get(tx, ty), null, tx, ty);
-        }
-      }
-      for (const e of this.entities) {
-        if (!e.visible || e === ignore || (e.type !== 'cloud' && e.type !== 'ladder')) continue;
-        const b = entityBox(e);
-        if (prevBottom > b.y + EPS || p.y + p.h <= b.y || p.x >= b.x + b.w || p.x + p.w <= b.x) continue;
-        if (e.type === 'cloud') return this.enterCloud({ entity: e });
-        if (!this.ladderAt(b.x + T / 2, b.y - 1)) return this.land(b.y, e.tile, e);
+      for (const r of this.piecesNear(this.body())) {
+        if ((r.type !== 'cloud' && r.type !== 'ladder') || (ignore && r.entity === ignore)) continue;
+        if (prevBottom > r.y + EPS || p.y + p.h <= r.y || p.x >= r.x + r.w || p.x + p.w <= r.x) continue;
+        if (r.type === 'cloud') return this.enterCloud(r);
+        if (!this.ladderAt(r.x + r.w / 2, r.y - 1)) return this.land(r.y, r);
       }
     } else if (dy < 0) {
-      const ty = Math.floor(p.y / T);
-      for (let tx = left; tx <= right; tx++) {
-        if (this.map.isSolid(tx, ty)) { p.y = (ty + 1) * T; p.vy = 0; break; }
-      }
-      for (const e of solidEntities()) {
-        const b = entityBox(e);
-        if (!overlapsNow(b)) continue;
-        p.y = b.y + b.h;
+      const hits = this.solidHits(this.body(), ignore).filter((h) => h.y + h.h <= prevTop + 0.01);
+      if (hits.length) {
+        p.y = Math.max(...hits.map((h) => h.y + h.h));
         p.vy = 0;
-        e.flags.headbutt = true; // 머리를 박음
+        for (const h of hits) if (h.entity) h.entity.flags.headbutt = true; // 머리를 박음
       }
     }
   }
 
-  enterCloud({ key = null, entity = null, top, bottom }) {
+  // 여러 조각 위에 걸쳐 있으면 몸 중심 아래 조각을 고름
+  pieceUnder(pieces) {
+    const cx = this.player.x + this.player.w / 2;
+    return pieces.find((h) => cx >= h.x && cx < h.x + h.w) || pieces[0];
+  }
+
+  enterCloud(piece) {
     const p = this.player;
     p.vy = 0;
     p.mode = 'cloud';
-    if (entity) {
-      p.y = entity.y * TILE_SIZE - p.h;
-      this.cloud = { entity, t: 0 };
-    } else {
-      p.y = top - p.h;
-      this.cloud = { key, startY: p.y, endY: bottom - p.h, t: 0 };
-    }
+    p.y = piece.y - p.h;
+    this.cloud = {
+      key: piece.entity ? null : cellKey(piece.tx, piece.ty),
+      entity: piece.entity, top: piece.y, bottom: piece.y + piece.h, t: 0,
+    };
   }
 
   // 발밑 블록 기록 (얼음·머신 판정, 움직이는 블록에 실려 가기, '위에서 점프' 판정용)
-  land(top, tile, entity = null, tx = 0, ty = 0) {
+  land(top, piece) {
     const p = this.player;
     p.y = top - p.h;
     p.vy = 0;
     p.onGround = true;
-    p.groundEntity = entity;
-    if (!entity) {
-      // 칸 블록 두 개에 걸쳐 서 있으면 몸 중심 아래를 우선
-      const center = this.map.get(Math.floor((p.x + p.w / 2) / TILE_SIZE), ty);
-      if (center && center.kind === 'design') tile = center;
-    }
-    p.groundType = tile && tile.kind === 'design' ? tile.design.type : null;
-    p.groundDir = tile?.dir ?? 1;
+    p.groundEntity = piece.entity;
+    p.groundType = piece.type;
+    p.groundDir = piece.tile?.dir ?? 1;
   }
 
   cameraTarget() {
@@ -764,9 +739,11 @@ class PlaySession {
   // ---- 코드 블록 ----
 
   addEntity(x, y, tile, programs) {
+    const design = tile.design;
     const e = {
-      x, y, // 칸 단위 (실수)
       startX: x, startY: y,
+      keep: design.keep, // 죽어도 진행
+      x, y, // 칸 단위 (실수)
       tile, // 디자인·위치·회전·방향 (convert로 바뀜)
       get type() { return this.tile.design.type; },
       angle: 0, // 코드로 돌린 각도 (도)
@@ -776,9 +753,11 @@ class PlaySession {
       pixelsVersion: 0,
       flags: { jump: false, headbutt: false, stick: false },
       seen: { jump: false, headbutt: false }, // 코드가 이벤트를 읽었는지
+      program: null,
       runner: null,
+      saved: null, // perm()으로 저장한 상태
     };
-    const design = tile.design;
+    e.initial = this.snapshot(e);
     if (!programs.has(design)) {
       try {
         programs.set(design, Script.compile(design.code));
@@ -787,9 +766,37 @@ class PlaySession {
       }
     }
     const program = programs.get(design);
+    e.api = this.scriptApi(e);
     if (program instanceof Error) this.reportError(e, program);
-    else e.runner = new ScriptRunner(program, this.scriptApi(e));
+    else {
+      e.program = program;
+      e.runner = new ScriptRunner(program, e.api, this.shared);
+    }
     this.entities.push(e);
+  }
+
+  snapshot(e) {
+    return {
+      x: e.x, y: e.y, tile: e.tile, angle: e.angle, tran: e.tran, visible: e.visible,
+      pixels: e.pixels && e.pixels.slice(), vars: e.runner ? { ...e.runner.vars } : {},
+    };
+  }
+
+  // 죽은 뒤: '죽어도 진행'이 아닌 블록을 처음 상태(또는 perm()으로 저장한 상태)로 되돌리고 코드를 처음부터
+  resetEntities() {
+    this.resetPending = false;
+    for (const key of Object.keys(this.shared)) delete this.shared[key];
+    Object.assign(this.shared, this.savedShared);
+    for (const e of this.entities) {
+      if (e.keep) continue;
+      const s = e.saved || e.initial;
+      Object.assign(e, { x: s.x, y: s.y, tile: s.tile, angle: s.angle, tran: s.tran, visible: s.visible });
+      e.pixels = s.pixels && s.pixels.slice();
+      e.pixelsVersion++;
+      for (const ev of ['jump', 'headbutt', 'stick']) e.flags[ev] = false;
+      e.seen.jump = e.seen.headbutt = false;
+      if (e.program) e.runner = new ScriptRunner(e.program, e.api, this.shared, s.vars);
+    }
   }
 
   runScripts(dt) {
@@ -804,28 +811,79 @@ class PlaySession {
     this.scriptErrors.push({ tag: e.tile.design.tag, x: e.startX, y: e.startY, line: err.line, message: err.message });
   }
 
-  // 블록을 칸 단위로 옮긴다. 위에 서 있는 캐릭터는 같이 실려 가고, 밀리는 캐릭터는 밀려난다.
-  moveEntity(e, dx, dy) {
+  isRiding(e) {
     const p = this.player;
+    return e.visible && p.mode === 'normal' && p.onGround && p.groundEntity === e;
+  }
+
+  // 이 블록의 단단한 조각 (월드 px)
+  solidPiecesOf(e) {
+    if (!e.visible || !isSolidType(e.type)) return [];
     const T = TILE_SIZE;
-    const riding = e.visible && p.mode === 'normal' && p.onGround && p.groundEntity === e;
+    return this.entityRects(e).map((r) => ({ x: e.x * T + r.x, y: e.y * T + r.y, w: r.w, h: r.h, type: e.type, tile: e.tile, entity: e }));
+  }
+
+  // 실려 가던 캐릭터를 블록 윗면에 다시 세움 (발이 윗면 근처에 있을 때)
+  reland(e) {
+    const p = this.player;
+    const feet = p.y + p.h;
+    const under = this.solidPiecesOf(e).filter((r) => p.x < r.x + r.w && p.x + p.w > r.x && Math.abs(r.y - feet) <= 6);
+    if (!under.length) return;
+    const top = Math.min(...under.map((r) => r.y));
+    if (!this.boxHitsSolid(p.x, top - p.h, e)) this.land(top, this.pieceUnder(under.filter((r) => r.y <= top + 0.01)));
+  }
+
+  // 블록이 움직이거나 돌아서 캐릭터와 겹치면 가장 조금 움직이는 쪽으로 밀어낸다. 갈 데가 없으면 끼어서 사망.
+  pushOut(e) {
+    const p = this.player;
+    const hits = this.solidPiecesOf(e).filter((r) => boxesOverlap(this.body(), r));
+    if (!hits.length) return;
+    const options = [
+      { dx: 0, dy: Math.min(...hits.map((h) => h.y)) - (p.y + p.h), up: true },
+      { dx: Math.min(...hits.map((h) => h.x)) - (p.x + p.w), dy: 0 },
+      { dx: Math.max(...hits.map((h) => h.x + h.w)) - p.x, dy: 0 },
+      { dx: 0, dy: Math.max(...hits.map((h) => h.y + h.h)) - p.y },
+    ].sort((a, b) => Math.abs(a.dx) + Math.abs(a.dy) - (Math.abs(b.dx) + Math.abs(b.dy)));
+    for (const o of options) {
+      if (this.boxHitsSolid(p.x + o.dx, p.y + o.dy)) continue;
+      p.x += o.dx;
+      p.y += o.dy;
+      if (o.up) this.reland(e); // 밑에서 올라오면 올라탐
+      return;
+    }
+    this.die(); // 블록 사이에 낌
+  }
+
+  // 블록을 칸 단위로 옮긴다. 위에 서 있는 캐릭터는 같이 실려 간다.
+  moveEntity(e, dx, dy) {
+    const T = TILE_SIZE;
+    const riding = this.isRiding(e);
     e.x += dx;
     e.y += dy;
     if (riding) {
-      this.moveX(dx * T, e);
+      this.moveX(dx * T, { ignore: e });
       this.moveY(dy * T, { ignore: e });
-      if (Math.abs(p.y + p.h - e.y * T) < 1 && p.x < (e.x + 1) * T && p.x + p.w > e.x * T) {
-        this.land(e.y * T, e.tile, e);
-      }
-      return;
-    }
-    if (!e.visible || !isSolidType(e.type)) return;
-    const b = entityBox(e);
-    if (!boxesOverlap({ x: p.x, y: p.y, w: p.w, h: p.h }, b)) return;
-    if (Math.abs(dx) >= Math.abs(dy)) p.x = dx > 0 ? b.x + b.w : b.x - p.w;
-    else if (dy < 0) this.land(b.y, e.tile, e); // 밑에서 올라오면 올라탐
-    else p.y = b.y + b.h;
-    if (this.boxHitsSolid(p.x, p.y, e)) this.die(); // 블록 사이에 끼면 사망
+      this.reland(e);
+    } else this.pushOut(e);
+  }
+
+  // 블록을 돌린다. 위에 서 있는 캐릭터는 블록 가운데를 축으로 같이 돌아간다.
+  rotateEntity(e, deg) {
+    const p = this.player;
+    const T = TILE_SIZE;
+    const riding = this.isRiding(e);
+    e.angle += deg;
+    if (!riding) return this.pushOut(e);
+    const cx = (e.x + 0.5) * T;
+    const cy = (e.y + 0.5) * T;
+    const fx = p.x + p.w / 2 - cx;
+    const fy = p.y + p.h - cy;
+    const c = Math.cos(deg * DEG);
+    const s = Math.sin(deg * DEG);
+    this.moveX(cx + fx * c - fy * s - (p.x + p.w / 2), { ignore: e });
+    this.moveY(cy + fx * s + fy * c - (p.y + p.h), { ignore: e });
+    this.reland(e);
+    this.pushOut(e);
   }
 
   // 코드에서 쓰는 함수들 (script.js의 명령·함수 이름과 같음)
@@ -846,7 +904,10 @@ class PlaySession {
       cooY: () => e.y,
       caCooX: () => (p.x + p.w / 2) / T - 0.5,
       caCooY: () => (p.y + p.h) / T - 1,
-      pxColor: (i) => (e.pixels || e.tile.design.pixels)[pixelIndex(i)] || '',
+      pxColor: (i) => {
+        const c = (e.pixels || e.tile.design.pixels)[pixelIndex(i)];
+        return c && c !== CLEAR ? c : ''; // 투명·빈 픽셀은 ""
+      },
       dis: () => !e.visible,
       app: () => e.visible,
       jump: () => (e.flags.jump ? (e.seen.jump = true) : false),
@@ -857,10 +918,9 @@ class PlaySession {
         if (!design) throw new Error(`블록 태그가 ${tag}인 블록이 없습니다.`);
         e.tile = designTile(design, e.tile);
         e.pixels = null;
+        this.pushOut(e);
       },
-      rot: (deg) => {
-        e.angle += num(deg, 'rot');
-      },
+      rot: (deg) => this.rotateEntity(e, num(deg, 'rot')),
       Tran: (v) => {
         e.tran = Math.max(0, Math.min(100, num(v, 'Tran')));
       },
@@ -875,16 +935,19 @@ class PlaySession {
       },
       px: (i, color) => {
         const index = pixelIndex(i);
-        if (!/^#[0-9a-f]{6}$/i.test(String(color))) throw new Error(`색은 #ff0000처럼 써야 합니다. (지금 ${color})`);
+        const value = String(color).toLowerCase();
+        if (!/^#[0-9a-f]{6}$/.test(value)) throw new Error(`색은 #ff0000처럼 써야 합니다. (지금 ${color})`);
         e.pixels = e.pixels || e.tile.design.pixels.slice();
-        e.pixels[index] = String(color).toLowerCase();
+        e.pixels[index] = value;
         e.pixelsVersion++;
+        this.pushOut(e);
       },
       disapp: () => {
         e.visible = false;
       },
       appear: () => {
         e.visible = true;
+        this.pushOut(e);
       },
       noKey: (name) => keyCodes(name).forEach((c) => this.blockedKeys.add(c)),
       yesKey: (name) => keyCodes(name).forEach((c) => this.blockedKeys.delete(c)),
@@ -892,6 +955,11 @@ class PlaySession {
         this.placeAt({ x: num(x, 'caTp'), y: num(y, 'caTp') });
       },
       kill: () => this.die(),
+      // 지금 상태(위치·각도·투명도·숨김·픽셀·변환·변수)와 월드 공통 변수를 저장 → 죽어도 이 상태에서 다시 시작
+      perm: () => {
+        e.saved = this.snapshot(e);
+        this.savedShared = { ...this.shared };
+      },
     };
   }
 
